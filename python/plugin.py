@@ -10,12 +10,14 @@ def install(package: str):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
 
-# This is the quick and dirty way to get packages installed if they are not already installed
-try:
-    import vim  # pylint: disable=import-error
-except Exception as e:
-    print("No vim module available outside vim")
-    raise e
+if "PYTEST_CURRENT_TEST" in os.environ:
+    # This is the quick and dirty way to get packages installed if they are not already installed
+    try:
+        import vim  # pylint: disable=import-error
+        
+    except Exception as e:
+        print("No vim module available outside vim")
+        raise e
 
 try:
     import wn
