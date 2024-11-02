@@ -25,11 +25,27 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
+        cache: 'pip'  # Enable pip caching
+
+    - name: Get pip cache dir
+      id: pip-cache
+      run: |
+        echo "dir=$(pip cache dir)" >> $GITHUB_OUTPUT
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: |
+          ${{ steps.pip-cache.outputs.dir }}
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-${{ matrix.python-version }}-
+          ${{ runner.os }}-pip-
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pylint pytest wn
+        pip install pylint pytest wn vim-client
 
     - name: Lint with pylint
       run: |
@@ -45,6 +61,26 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+        cache: 'pip'
+
+    - name: Get pip cache dir
+      id: pip-cache-vim
+      run: |
+        echo "dir=$(pip cache dir)" >> $GITHUB_OUTPUT
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: |
+          ${{ steps.pip-cache-vim.outputs.dir }}
+        key: ${{ runner.os }}-pip-vim-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-vim-
+          
     - name: Install vint
       run: |
         python -m pip install --upgrade pip
