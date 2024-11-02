@@ -4,7 +4,7 @@
 # Maintainer:   klebster2 <https://github.com/klebster2>
 import subprocess
 import sys
-
+import os
 
 def install(package: str):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -14,7 +14,6 @@ if "PYTEST_CURRENT_TEST" in os.environ:
     # This is the quick and dirty way to get packages installed if they are not already installed
     try:
         import vim  # pylint: disable=import-error
-        
     except Exception as e:
         print("No vim module available outside vim")
         raise e
