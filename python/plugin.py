@@ -30,8 +30,11 @@ LANGUAGE_TO_WORDNET_ARTEFACT = {
     for dataset_name, item in wn.config.index.items()
     if item.get("language")
 }
+if "PYTEST_CURRENT_TEST" in os.environ:
+    ARTEFACT_NAME = LANGUAGE_TO_WORDNET_ARTEFACT["mul"]
+else:
+    ARTEFACT_NAME = LANGUAGE_TO_WORDNET_ARTEFACT.get(vim.eval("g:wn_cmp_language"), "mul")
 
-ARTEFACT_NAME = LANGUAGE_TO_WORDNET_ARTEFACT.get(vim.eval("g:wn_cmp_language"), "mul")
 try:
     spec = wn.Wordnet(ARTEFACT_NAME)
 
