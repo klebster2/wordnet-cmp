@@ -2,7 +2,6 @@
 # Description:  A plugin to help users Define, Use, and Research words.
 # Last Change:  2nd November 2024
 # Maintainer:   klebster2 <https://github.com/klebster2>
-import os
 import re
 import subprocess
 import sys
