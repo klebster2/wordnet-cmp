@@ -1,6 +1,18 @@
 name: Lint and Test
 
 on:
+  workflow_dispatch:  # Enables manual triggering
+    inputs:
+      python_only:
+        description: 'Run only Python checks'
+        required: false
+        type: boolean
+        default: false
+      vim_only:
+        description: 'Run only Vim checks'
+        required: false
+        type: boolean
+        default: false
   push:
     paths:
       - 'python/plugin.py'
@@ -9,14 +21,14 @@ on:
     paths:
       - 'python/plugin.py'
       - 'plugin/wordnet-cmp.vim'
-  repository_dispatch: # Add this line for the dispatch trigger
 
 jobs:
   python-check:
+    if: "!inputs.vim_only"
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.8', '3.9', '3.10', '3.11']
 
     steps:
     - uses: actions/checkout@v3
@@ -41,6 +53,7 @@ jobs:
         pytest python/plugin.py
 
   vim-check:
+    if: "!inputs.python_only"
     runs-on: ubuntu-latest
     
     steps:
