@@ -3,6 +3,7 @@
 # Last Change:  2nd November 2024
 # Maintainer:   klebster2 <https://github.com/klebster2>
 import os
+import re
 import subprocess
 import sys
 
@@ -11,8 +12,7 @@ def install(package: str):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
 
-if "PYTEST_CURRENT_TEST" in os.environ:
-    # This is the quick and dirty way to get packages installed if they are not already installed
+if not any(re.findall(r"pytest|py.test", sys.argv[0])):
     try:
         import vim  # pylint: disable=import-error
     except Exception as e:
@@ -21,6 +21,7 @@ if "PYTEST_CURRENT_TEST" in os.environ:
 else:
     vim = None  # type: ignore
 
+# This is the quick and dirty way to get packages installed if they are not already installed
 try:
     import wn
 except ImportError:
