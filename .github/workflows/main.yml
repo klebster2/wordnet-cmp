@@ -34,7 +34,7 @@ jobs:
 
     - name: Lint with pylint
       run: |
-        pylint python/plugin.py --count --max-complexity=10 --max-line-length=100 --statistics
+        pylint --max-line-length=100 --output-format=text python/plugin.py
 
     - name: Test with pytest
       run: |
