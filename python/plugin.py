@@ -32,7 +32,7 @@ LANGUAGE_TO_WORDNET_ARTEFACT = {
     for dataset_name, item in wn.config.index.items()
     if item.get("language")
 }
-if not any(re.findall(r"pytest|py.test", sys.argv[0])):
+if vim is None:
     ARTEFACT_NAME = LANGUAGE_TO_WORDNET_ARTEFACT["mul"]
 else:
     ARTEFACT_NAME = LANGUAGE_TO_WORDNET_ARTEFACT.get(
