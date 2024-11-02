@@ -2,17 +2,6 @@ name: Lint and Test
 
 on:
   workflow_dispatch:  # Enables manual triggering
-    inputs:
-      python_only:
-        description: 'Run only Python checks'
-        required: false
-        type: boolean
-        default: true
-      vim_only:
-        description: 'Run only Vim checks'
-        required: false
-        type: boolean
-        default: true
   push:
     paths:
       - 'python/plugin.py'
@@ -24,7 +13,6 @@ on:
 
 jobs:
   python-check:
-    if: "!inputs.vim_only"
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -53,7 +41,6 @@ jobs:
         pytest python/plugin.py
 
   vim-check:
-    if: "!inputs.python_only"
     runs-on: ubuntu-latest
     
     steps:
