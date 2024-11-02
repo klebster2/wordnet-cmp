@@ -1,0 +1,21 @@
+[MASTER]
+# Add paths to be ignored
+ignore=CVS
+
+[FORMAT]
+# Maximum number of characters on a single line
+max-line-length=100
+
+[MESSAGES CONTROL]
+# Disable specific warnings (customize as needed)
+disable=C0111,  # missing-docstring
+        C0103,  # invalid-name
+        R0903,  # too-few-public-methods
+        R0913   # too-many-arguments
+
+[REPORTS]
+# Set the output format
+output-format=text
+
+# Include a brief explanation of each error
+msg-template={path}:{line}: [{msg_id}({symbol}), {obj}] {msg}
