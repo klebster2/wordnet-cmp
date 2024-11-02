@@ -2,9 +2,10 @@
 # Description:  A plugin to help users Define, Use, and Research words.
 # Last Change:  2nd November 2024
 # Maintainer:   klebster2 <https://github.com/klebster2>
+import os
 import subprocess
 import sys
-import os
+
 
 def install(package: str):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -17,6 +18,8 @@ if "PYTEST_CURRENT_TEST" in os.environ:
     except Exception as e:
         print("No vim module available outside vim")
         raise e
+else:
+    vim = None  # type: ignore
 
 try:
     import wn
@@ -32,7 +35,9 @@ LANGUAGE_TO_WORDNET_ARTEFACT = {
 if "PYTEST_CURRENT_TEST" in os.environ:
     ARTEFACT_NAME = LANGUAGE_TO_WORDNET_ARTEFACT["mul"]
 else:
-    ARTEFACT_NAME = LANGUAGE_TO_WORDNET_ARTEFACT.get(vim.eval("g:wn_cmp_language"), "mul")
+    ARTEFACT_NAME = LANGUAGE_TO_WORDNET_ARTEFACT.get(
+        vim.eval("g:wn_cmp_language"), "mul"  # type: ignore
+    )
 
 try:
     spec = wn.Wordnet(ARTEFACT_NAME)
