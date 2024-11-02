@@ -12,7 +12,7 @@ def install(package: str):
 
 # This is the quick and dirty way to get packages installed if they are not already installed
 try:
-    import vim
+    import vim  # pylint: disable=import-error
 except Exception as e:
     print("No vim module available outside vim")
     raise e
@@ -51,5 +51,5 @@ def query():
     # Strip and clean the word
     cword = cword.strip()
     assert isinstance(cword, str)
-    # TODO: add cleaning logic here
+    # TODO: add cleaning logic here # pylint: disable
     return cword
