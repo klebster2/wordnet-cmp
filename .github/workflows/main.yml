@@ -7,12 +7,12 @@ on:
         description: 'Run only Python checks'
         required: false
         type: boolean
-        default: false
+        default: true
       vim_only:
         description: 'Run only Vim checks'
         required: false
         type: boolean
-        default: false
+        default: true
   push:
     paths:
       - 'python/plugin.py'
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
 
     steps:
     - uses: actions/checkout@v3
@@ -41,12 +41,12 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install flake8 pytest wn
+        pip install pylint pytest wn
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: Lint with flake8
+    - name: Lint with pylint
       run: |
-        flake8 python/plugin.py --count --max-complexity=10 --max-line-length=100 --statistics
+        pylint python/plugin.py --count --max-complexity=10 --max-line-length=100 --statistics
 
     - name: Test with pytest
       run: |
