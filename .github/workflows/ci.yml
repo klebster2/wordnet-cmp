@@ -9,6 +9,7 @@ on:
     paths:
       - 'python/plugin.py'
       - 'plugin/wordnet-cmp.vim'
+  repository_dispatch: # Add this line for the dispatch trigger
 
 jobs:
   python-check:
