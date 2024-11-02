@@ -51,5 +51,5 @@ def query():
     # Strip and clean the word
     cword = cword.strip()
     assert isinstance(cword, str)
-    # TODO: add cleaning logic here # pylint: disable
+    # TODO: add cleaning logic here # pylint: disable=fixme
     return cword
