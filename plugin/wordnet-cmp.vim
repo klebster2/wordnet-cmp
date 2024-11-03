@@ -33,9 +33,7 @@ sys.path.insert(0, python_root_dir)
 import plugin
 EOF
 
-" add language, and comma separated keep keys arg
 function! s:wordnetcmp()
-    " Register the source with nvim-cmp
     lua << LUA_EOF
     local cmp = require('cmp')
     local source = {}
@@ -46,58 +44,10 @@ function! s:wordnetcmp()
 
     source.get_trigger_characters = function()
         return {
-            "a",
-            "b",
-            "c",
-            "d",
-            "e",
-            "f",
-            "g",
-            "h",
-            "i",
-            "j",
-            "k",
-            "l",
-            "m",
-            "n",
-            "o",
-            "p",
-            "q",
-            "r",
-            "s",
-            "t",
-            "u",
-            "v",
-            "w",
-            "x",
-            "y",
-            "z",
-            "A",
-            "B",
-            "C",
-            "D",
-            "E",
-            "F",
-            "G",
-            "H",
-            "I",
-            "J",
-            "K",
-            "L",
-            "M",
-            "N",
-            "O",
-            "P",
-            "Q",
-            "R",
-            "S",
-            "T",
-            "U",
-            "V",
-            "W",
-            "X",
-            "Y",
-            "Z",
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+            "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"
         }
     end
 
@@ -106,56 +56,95 @@ function! s:wordnetcmp()
     end
 
     source.complete = function(self, params, callback)
-        -- Call Python function to get completions
         local line = vim.fn.getline('.')
         local original_start = vim.fn.col('.') - 1
         local start = original_start
-        while start > 0 and string.match(line:sub(start, start), '%S') do
+        while start > 0 and string.match(line:sub(start, start), '%w') do
+            --- Better still; ensure start matches alphanumeric by using \w as in:
             start = start - 1
         end
         local query_word = line:sub(start + 1, vim.fn.col('.') - 1)
-        if #query_word < 3 then return end  --- Short input requires a lot of processing, so let's skip it.
+        if #query_word < 3 then return end
+
         local items = vim.fn.py3eval('plugin.wordnet_complete("' .. query_word .. '")')
 
-        -- Convert items to nvim-cmp format
-        local cached_items = {}
-        ---- Count items that have the same word and POS
-        local cmp_items = {}
+        -- Group items by word and POS
+        local grouped_items = {}
+        local seen_definitions = {}  -- Track seen definitions per word+POS
+
         for _, item in ipairs(items) do
             local pos = ""
             if item.kind == 'N' then
-                pos = 'NOUN'
+                pos = 'Noun'
             elseif item.kind == 'V' then
-                pos = 'VERB'
+                pos = 'Verb'
             elseif item.kind == 'A' then
-                pos = 'ADJECTIVE'
+                pos = 'Adjective'
             elseif item.kind == 'S' then
-                pos = 'ADJECTIVE SATELLITE'
+                pos = 'Adjective Satellite'
             elseif item.kind == 'R' then
-                pos = 'ADVERB'
+                pos = 'Adverb'
             else
                 pos = item.kind
             end
-            cached_items[item.word .. pos] = (cached_items[item.word .. pos] or 0) + 1
-            table.insert(cmp_items, {
-                label = item.word .. ' [' .. pos .. '] (' .. cached_items[item.word .. pos] .. ')',
-                kind = cmp.lsp.CompletionItemKind.Text,
-                documentation = item.menu,
-                textEdit = {
-                  newText = query_word,
-                  filterText = query_word,
-                  range = {
-                    ['start'] = {
-                      line = params.context.cursor.row - 1,
-                        character = original_start,
-                    },
-                    ['end'] = {
-                        line = params.context.cursor.row - 1,
-                        character = params.context.cursor.col - 1,
+
+            local key = item.word .. '_' .. pos
+            seen_definitions[key] = seen_definitions[key] or {}
+
+            -- Only process if this definition hasn't been seen before
+            if not seen_definitions[key][item.menu] then
+                seen_definitions[key][item.menu] = true
+
+                if not grouped_items[key] then
+                    grouped_items[key] = {
+                        word = item.word,
+                        pos = pos,
+                        senses = {},
+                        count = 0
                     }
-                  },
+                end
+                
+                grouped_items[key].count = grouped_items[key].count + 1
+                table.insert(grouped_items[key].senses, {
+                    sense_num = grouped_items[key].count,
+                    definition = item.menu
+                })
+            end
+        end
+
+        -- Convert grouped items to cmp items
+        local cmp_items = {}
+        for _, group in pairs(grouped_items) do
+            -- Combine all senses into a single documentation string
+            local doc = ""
+            for _, sense in ipairs(group.senses) do
+                doc = doc .. string.format("%d. %s\n", sense.sense_num, sense.definition)
+            end
+            -- make bold the query word
+            doc = string.gsub(doc, query_word, string.format("**%s**", query_word ))
+
+            table.insert(cmp_items, {
+                label = string.format("%s [%s] (%d)", group.word, group.pos, group.count),
+                kind = cmp.lsp.CompletionItemKind.Text,
+                documentation = {
+                    kind = 'markdown',
+                    value = string.format("**%s** _%s_\n\n%s", group.word, group.pos, doc)
                 },
-              })
+                textEdit = {
+                    newText = query_word,
+                    filterText = query_word,
+                    range = {
+                        ['start'] = {
+                            line = params.context.cursor.row - 1,
+                            character = original_start,
+                        },
+                        ['end'] = {
+                            line = params.context.cursor.row - 1,
+                            character = params.context.cursor.col - 1,
+                        }
+                    },
+                },
+            })
         end
 
         callback({ items = cmp_items, isIncomplete = false })
@@ -166,5 +155,4 @@ function! s:wordnetcmp()
 LUA_EOF
 endfunction
 
-" Autoload the setup function
 call s:wordnetcmp()

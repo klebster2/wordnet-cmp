@@ -92,7 +92,7 @@ class WordNetCompleter:
                         if synset_definition is None:
                             synset_definition = ""
                         _item = self.format_completion_item(
-                            lemma, "Synonym", f"[syn] {synset_definition[:50]}..."
+                            lemma, "Synonym", f"[syn] {synset_definition}"
                         )
                         if _item not in results:
                             results.append(_item)
@@ -110,7 +110,7 @@ class WordNetCompleter:
                         hyponym_definition = ""
 
                     _item = self.format_completion_item(
-                        lemma, "Hyponym", f"[hyp] {hyponym_definition[:50]}..."
+                        lemma, "Hyponym", f"[hyp] {hyponym_definition}"
                     )
                     if _item not in results:
                         results.append(_item)
@@ -130,7 +130,7 @@ class WordNetCompleter:
                     if meronym_definition is None:
                         meronym_definition = ""
                     _item = self.format_completion_item(
-                        lemma, "Meronym", f"[mer] {meronym_definition[:50]}..."
+                        lemma, "Meronym", f"[mer] {meronym_definition}"
                     )
                     if _item not in results:
                         results.append(_item)
