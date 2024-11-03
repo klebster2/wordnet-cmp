@@ -115,7 +115,7 @@ function! s:wordnetcmp()
         end
         local query_word = line:sub(start + 1, vim.fn.col('.') - 1)
         if #query_word < 3 then return end  --- Short input requires a lot of processing, so let's skip it.
-        local items = vim.fn.py3eval('plugin.wordnet_complete(0, "' .. query_word .. '")')
+        local items = vim.fn.py3eval('plugin.wordnet_complete("' .. query_word .. '")')
 
         -- Convert items to nvim-cmp format
         local cached_items = {}

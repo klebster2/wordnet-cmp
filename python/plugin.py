@@ -88,7 +88,9 @@ class WordNetCompleter:
             if isinstance(synset, wn.Synset):
                 for lemma in synset.lemmas():
                     if lemma.lower() != word.lower():
-                        synset_definition: str | None = synset.definition()
+                        synset_definition: str | None = (
+                            synset.definition()
+                        )  # pylint: disable=unsupported-assignment-operation
                         if synset_definition is None:
                             synset_definition = ""
                         _item = self.format_completion_item(
@@ -105,7 +107,9 @@ class WordNetCompleter:
         for synset in self.get_synsets(word):  # pylint: disable=no-value-for-parameter
             for hyponym in synset.hyponyms():
                 for lemma in hyponym.lemmas():
-                    hyponym_definition: str | None = hyponym.definition()
+                    hyponym_definition: str | None = (
+                        hyponym.definition()
+                    )  # pylint: disable=unsupported-assignment-operation
                     if hyponym_definition is None:
                         hyponym_definition = ""
 
@@ -124,7 +128,9 @@ class WordNetCompleter:
             # Get both part and substance meronyms
             for meronym in synset.meronyms():
                 for lemma in meronym.lemmas():
-                    meronym_definition: str | None = meronym.definition()
+                    meronym_definition: str | None = (
+                        meronym.definition()
+                    )  # pylint: disable=unsupported-assignment-operation
                     if meronym_definition is None:
                         meronym_definition = ""
                     _item = self.format_completion_item(
@@ -220,7 +226,7 @@ def test_lookup_word__win():
     ]
 
 
-def wordnet_complete(findstart: int, base: str) -> t.List[t.Dict[str, t.Any]]:
+def wordnet_complete(base: str) -> t.List[t.Dict[str, t.Any]]:
     """Main completion function to be called from Vim."""
     # Return completion items
     return completer.get_all_completions(base) + [
@@ -228,8 +234,8 @@ def wordnet_complete(findstart: int, base: str) -> t.List[t.Dict[str, t.Any]]:
     ]
 
 
-def test_wordnet_complete():
-    assert wordnet_complete(0, "win") == [
+def test_wordnet_complete__win():
+    assert wordnet_complete("win") == [
         {
             "word": "acquire",
             "kind": "Synonym",
