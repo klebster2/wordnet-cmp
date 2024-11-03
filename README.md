@@ -45,7 +45,7 @@ use {
 
 ```lua
 {
-  'yourusername/wordnet-cmp',
+  'klebster2/wordnet-cmp',
   dependencies = {
     'hrsh7th/nvim-cmp'
   }
