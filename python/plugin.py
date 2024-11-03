@@ -88,9 +88,7 @@ class WordNetCompleter:
             if isinstance(synset, wn.Synset):
                 for lemma in synset.lemmas():
                     if lemma.lower() != word.lower():
-                        synset_definition: str | None = (
-                            synset.definition()
-                        )  # pylint: disable=unsupported-assignment-operation
+                        synset_definition: t.Optional[str] = synset.definition()
                         if synset_definition is None:
                             synset_definition = ""
                         _item = self.format_completion_item(
@@ -107,9 +105,7 @@ class WordNetCompleter:
         for synset in self.get_synsets(word):  # pylint: disable=no-value-for-parameter
             for hyponym in synset.hyponyms():
                 for lemma in hyponym.lemmas():
-                    hyponym_definition: str | None = (
-                        hyponym.definition()
-                    )  # pylint: disable=unsupported-assignment-operation
+                    hyponym_definition: t.Optional[str] = hyponym.definition()
                     if hyponym_definition is None:
                         hyponym_definition = ""
 
@@ -128,7 +124,7 @@ class WordNetCompleter:
             # Get both part and substance meronyms
             for meronym in synset.meronyms():
                 for lemma in meronym.lemmas():
-                    meronym_definition: str | None = (
+                    meronym_definition: t.Optional[str] = (
                         meronym.definition()
                     )  # pylint: disable=unsupported-assignment-operation
                     if meronym_definition is None:
