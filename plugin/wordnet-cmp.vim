@@ -1,12 +1,7 @@
-if !has('python3')
-  echo 'vim has to be compiled with +python3 to run this'
-  finish
-endif
-
 if exists('g:loaded_wordnet_cmp')
     finish
 endif
-let g:loaded_wordnet_cmp = 1
+"let g:loaded_wordnet_cmp = 1
 
 " Set default configuration values
 if !exists('g:wn_cmp_language')
@@ -36,7 +31,24 @@ EOF
 function! s:wordnetcmp()
     lua << LUA_EOF
     local cmp = require('cmp')
+
     local source = {}
+
+    -- Helper functions
+    local function format_menu_source(word_class)
+        return string.format("WORDNET [%s]", word_class)
+    end
+
+    local function create_rich_documentation(word, word_class, definitions)
+        local doc = {}
+        table.insert(doc, string.format("# %s [%s]\n", word, word_class))
+        
+        for i, def in ipairs(definitions) do
+            table.insert(doc, string.format("%d. _%s_", i, def))
+        end
+        
+        return table.concat(doc, "\n\n")
+    end
 
     source.new = function()
         return setmetatable({}, { __index = source })
@@ -52,102 +64,103 @@ function! s:wordnetcmp()
     end
 
     source.get_keyword_pattern = function()
-        return [[\w\+]]
+        return [[\k\+]]
     end
-
     source.complete = function(self, params, callback)
         local line = vim.fn.getline('.')
-        local original_start = vim.fn.col('.') - 1
-        local start = original_start
-        while start > 0 and string.match(line:sub(start, start), '%w') do
-            --- Better still; ensure start matches alphanumeric by using \w as in:
-            start = start - 1
+        local col = vim.fn.col('.')
+        local current_word_start = vim.fn.match(line:sub(1, col-1), [[\k*$]])
+        local query_word = line:sub(current_word_start + 1, col - 1)
+        
+        if #query_word < vim.g.wn_cmp_min_word_length then
+            callback({ items = {}, isIncomplete = true })
+            return
         end
-        local query_word = line:sub(start + 1, vim.fn.col('.') - 1)
-        if #query_word < 3 then return end
+        
+        -- Get items from Python
+        local ok, items = pcall(vim.fn.py3eval, string.format('plugin.wordnet_complete("%s")', query_word))
+        if not ok then
+            vim.notify('Error getting completions: ' .. tostring(items), vim.log.levels.ERROR)
+            callback({ items = {}, isIncomplete = true })
+            return
+        end
 
-        local items = vim.fn.py3eval('plugin.wordnet_complete("' .. query_word .. '")')
+        -- Group by word and word class
+        local main_senses = {}
+        local related_items = {}
 
-        -- Group items by word and POS
-        local grouped_items = {}
-        local seen_definitions = {}  -- Track seen definitions per word+POS
-
+        -- First pass: organize main senses and related terms
         for _, item in ipairs(items) do
-            local pos = ""
-            if item.kind == 'N' then
-                pos = 'Noun'
-            elseif item.kind == 'V' then
-                pos = 'Verb'
-            elseif item.kind == 'A' then
-                pos = 'Adjective'
-            elseif item.kind == 'S' then
-                pos = 'Adjective Satellite'
-            elseif item.kind == 'R' then
-                pos = 'Adverb'
-            else
-                pos = item.kind
-            end
-
-            local key = item.word .. '_' .. pos
-            seen_definitions[key] = seen_definitions[key] or {}
-
-            -- Only process if this definition hasn't been seen before
-            if not seen_definitions[key][item.menu] then
-                seen_definitions[key][item.menu] = true
-
-                if not grouped_items[key] then
-                    grouped_items[key] = {
+            if item.data.type == "main" then
+                local key = string.format("%s_%s", item.word, item.data.word_class)
+                if not main_senses[key] then
+                    main_senses[key] = {
                         word = item.word,
-                        pos = pos,
-                        senses = {},
-                        count = 0
+                        word_class = item.data.word_class,
+                        definitions = {},
+                        textEdit = item.textEdit
                     }
                 end
-                
-                grouped_items[key].count = grouped_items[key].count + 1
-                table.insert(grouped_items[key].senses, {
-                    sense_num = grouped_items[key].count,
-                    definition = item.menu
+                table.insert(main_senses[key].definitions, item.data.definition)
+            else
+                table.insert(related_items, {
+                    label = item.word,
+                    kind = cmp.lsp.CompletionItemKind.Text,
+                    detail = format_menu_source(item.data.word_class),
+                    menu = table.concat(item.data.chain, " → "),
+                    documentation = {
+                        kind = 'markdown',
+                        value = string.format("# %s\n\n_%s_\n\n**Chain:**\n%s",
+                            item.word,
+                            item.data.definition,
+                            table.concat(item.data.chain, " → ")
+                        )
+                    },
+                    filterText = query_word,
+                    sortText = string.format("B%s%s",
+                        item.data.word_class,
+                        string.format("%03d", #(item.data.chain or {}))
+                    ),
+                    textEdit = item.textEdit
                 })
             end
         end
 
-        -- Convert grouped items to cmp items
-        local cmp_items = {}
-        for _, group in pairs(grouped_items) do
-            -- Combine all senses into a single documentation string
-            local doc = ""
-            for _, sense in ipairs(group.senses) do
-                doc = doc .. string.format("%d. %s\n", sense.sense_num, sense.definition)
-            end
-            -- make bold the query word
-            doc = string.gsub(doc, query_word, string.format("**%s**", query_word ))
+        -- Create result list
+        local result = {}
 
-            table.insert(cmp_items, {
-                label = string.format("%s [%s] (%d)", group.word, group.pos, group.count),
-                kind = cmp.lsp.CompletionItemKind.Text,
+        -- Add main senses (separated by word class)
+        for _, sense in pairs(main_senses) do
+            -- Create numbered definitions list
+            local def_list = {}
+            for i, def in ipairs(sense.definitions) do
+                table.insert(def_list, string.format("%d. _%s_", i, def))
+            end
+            
+            table.insert(result, {
+                label = sense.word,
+                kind = cmp.lsp.CompletionItemKind.Class,
+                detail = format_menu_source(sense.word_class),
+                menu = string.format("%d definitions", #sense.definitions),
                 documentation = {
                     kind = 'markdown',
-                    value = string.format("**%s** _%s_\n\n%s", group.word, group.pos, doc)
+                    value = string.format("# %s [%s]\n\n%s",
+                        sense.word,
+                        sense.word_class,
+                        table.concat(def_list, "\n\n")
+                    )
                 },
-                textEdit = {
-                    newText = query_word,
-                    filterText = query_word,
-                    range = {
-                        ['start'] = {
-                            line = params.context.cursor.row - 1,
-                            character = original_start,
-                        },
-                        ['end'] = {
-                            line = params.context.cursor.row - 1,
-                            character = params.context.cursor.col - 1,
-                        }
-                    },
-                },
+                filterText = sense.word,
+                sortText = string.format("A%s%s", sense.word, sense.word_class),
+                textEdit = sense.textEdit
             })
         end
 
-        callback({ items = cmp_items, isIncomplete = false })
+        -- Add related terms if we have any
+        callback({
+            items = result,
+            isIncomplete = false
+        })
     end
 
     -- Register the source

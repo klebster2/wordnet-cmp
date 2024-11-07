@@ -1,6 +1,6 @@
 # wordnet-cmp
 
-A Vim/Neovim plugin that provides WordNet-based completions through nvim-cmp, offering synonyms, antonyms, hyponyms, and meronyms.
+A Vim/Neovim plugin that provides WordNet-based completions through nvim-cmp, offering synonyms, hyponyms, and meronyms.
 
 ## Features
 
