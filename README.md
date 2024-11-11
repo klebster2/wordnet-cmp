@@ -19,7 +19,7 @@ A Vim/Neovim plugin that provides WordNet-based completions through nvim-cmp, of
 - Python 3.8 or higher
 - nvim-cmp installed and configured
 - Python packages:
-  [`wn`](https://github.com/goodmami/wn)
+  [`wn>=0.10.1`](https://github.com/goodmami/wn)
 
 ## Installation
 
