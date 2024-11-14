@@ -1,4 +1,4 @@
 pylint
 pytest
-wn
+wn>=0.10.1
 vim-client

@@ -36,19 +36,25 @@ function! s:wordnetcmp()
 
     -- Helper functions
     local function format_menu_source(word_class)
-        return string.format("WORDNET [%s]", word_class)
+        return ""
     end
 
-    local function create_rich_documentation(word, word_class, definitions)
+    local function create_rich_documentation(word, word_class, definition, sense_synonyms)
         local doc = {}
         table.insert(doc, string.format("# %s [%s]\n", word, word_class))
+        table.insert(doc, string.format("_%s_\n", definition))
         
-        for i, def in ipairs(definitions) do
-            table.insert(doc, string.format("%d. _%s_", i, def))
+        if sense_synonyms and #sense_synonyms > 0 then
+            table.insert(doc, "\n**Synonyms:**")
+            for _, syn in ipairs(sense_synonyms) do
+                local syn_word = syn[1]
+                table.insert(doc, string.format("- %s", syn_word))
+            end
         end
         
-        return table.concat(doc, "\n\n")
+        return table.concat(doc, "\n")
     end
+
 
     source.new = function()
         return setmetatable({}, { __index = source })
@@ -66,6 +72,62 @@ function! s:wordnetcmp()
     source.get_keyword_pattern = function()
         return [[\k\+]]
     end
+    -- Source file formatting in your plugin.vim
+    local function format_menu_source(word_class)
+        return "[" .. word_class .. "]"
+    end
+
+    local function create_rich_documentation(item)
+        local doc = {}
+        local word = item.word
+        local word_class = item.data.word_class
+        local definition = item.data.definition
+        
+        -- Main header
+        table.insert(doc, string.format("# %s [%s]\n", word, word_class))
+        
+        -- Main definition
+        table.insert(doc, string.format("_%s_\n", definition))
+        
+        -- Handle sense-specific synonyms
+        if item.data.sense_synonyms and #item.data.sense_synonyms > 0 then
+            table.insert(doc, "\n**Synonyms:**")
+            for _, syn in ipairs(item.data.sense_synonyms) do
+                local syn_word, syn_def = syn[1], syn[2]
+                if syn_word ~= word then  -- Don't include the word itself as its own synonym
+                    table.insert(doc, string.format("- %s: _%s_", syn_word, syn_def))
+                end
+            end
+        end
+        
+        -- Handle semantic relations (meronyms, hyponyms, etc.)
+        if item.data.chain and #item.data.chain > 1 then
+            -- Get relation type and display name
+            local relation_type = item.data.type
+            local relation_display = {
+                hyponym = "Types/Specific Forms",
+                hypernym = "General Categories",
+                meronym = "Parts/Components",
+                troponym = "Ways to",
+                similar = "Similar Terms",
+            }
+            
+            local relation_name = relation_display[relation_type] or relation_type:gsub("^%l", string.upper)
+            
+            table.insert(doc, string.format("\n**%s:**", relation_name))
+            
+            -- Build relation chain display
+            local chain = item.data.chain
+            local chain_str = table.concat(chain, " → ")
+            table.insert(doc, string.format("- Chain: %s", chain_str))
+            if item.data.definition then
+                table.insert(doc, string.format("- Definition: _%s_", item.data.definition))
+            end
+        end
+        
+        return table.concat(doc, "\n")
+    end
+
     source.complete = function(self, params, callback)
         local line = vim.fn.getline('.')
         local col = vim.fn.col('.')
@@ -85,87 +147,36 @@ function! s:wordnetcmp()
             return
         end
 
-        -- Group by word and word class
-        local main_senses = {}
-        local related_items = {}
-
-        -- First pass: organize main senses and related terms
+        -- Transform items for completion
+        local result = {}
+        
         for _, item in ipairs(items) do
-            if item.data.type == "main" then
-                local key = string.format("%s_%s", item.word, item.data.word_class)
-                if not main_senses[key] then
-                    main_senses[key] = {
-                        word = item.word,
-                        word_class = item.data.word_class,
-                        definitions = {},
-                        textEdit = item.textEdit
-                    }
-                end
-                table.insert(main_senses[key].definitions, item.data.definition)
-            else
-                table.insert(related_items, {
+            -- if word starts with query_word
+            if item.word:find("^" .. query_word) then
+                local completion_item = {
                     label = item.word,
                     kind = cmp.lsp.CompletionItemKind.Text,
-                    detail = format_menu_source(item.data.word_class),
-                    menu = table.concat(item.data.chain, " → "),
-                    documentation = {
-                        kind = 'markdown',
-                        value = string.format("# %s\n\n_%s_\n\n**Chain:**\n%s",
-                            item.word,
-                            item.data.definition,
-                            table.concat(item.data.chain, " → ")
-                        )
-                    },
+                    detail = item.menu,
+                    documentation = item.documentation,
                     filterText = query_word,
-                    sortText = string.format("B%s%s",
+                    sortText = string.format("%s%s%s",
+                        item.data.type == "main" and "A" or
+                        item.data.type == "synonym" and "B" or "C",
                         item.data.word_class,
-                        string.format("%03d", #(item.data.chain or {}))
-                    ),
-                    textEdit = item.textEdit
-                })
-            end
-        end
-
-        -- Create result list
-        local result = {}
-
-        -- Add main senses (separated by word class)
-        for _, sense in pairs(main_senses) do
-            -- Create numbered definitions list
-            local def_list = {}
-            for i, def in ipairs(sense.definitions) do
-                table.insert(def_list, string.format("%d. _%s_", i, def))
-            end
-            
-            table.insert(result, {
-                label = sense.word,
-                kind = cmp.lsp.CompletionItemKind.Class,
-                detail = format_menu_source(sense.word_class),
-                menu = string.format("%d definitions", #sense.definitions),
-                documentation = {
-                    kind = 'markdown',
-                    value = string.format("# %s [%s]\n\n%s",
-                        sense.word,
-                        sense.word_class,
-                        table.concat(def_list, "\n\n")
+                        item.word
                     )
-                },
-                filterText = sense.word,
-                sortText = string.format("A%s%s", sense.word, sense.word_class),
-                textEdit = sense.textEdit
-            })
+                }
+                table.insert(result, completion_item)
+            end
         end
 
-        -- Add related terms if we have any
         callback({
             items = result,
             isIncomplete = false
         })
     end
-
     -- Register the source
     cmp.register_source('wordnet', source.new())
 LUA_EOF
 endfunction
-
 call s:wordnetcmp()
