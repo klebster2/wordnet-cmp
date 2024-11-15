@@ -1,7 +1,7 @@
+scriptencoding
 if exists('g:loaded_wordnet_cmp')
     finish
 endif
-"let g:loaded_wordnet_cmp = 1
 
 " Set default configuration values
 if !exists('g:wn_cmp_language')
