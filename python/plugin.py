@@ -1,7 +1,9 @@
 # Title:        wordnet-cmp
 # Description:  A plugin to help users Define, Use, and Research words.
-# Last Change:  10th November 2024
+# Last Change:  14th November 2024
 # Maintainer:   klebster2 <https://github.com/klebster2>
+from __future__ import annotations
+
 import re
 import subprocess
 import sys
@@ -10,6 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
+from typing import Dict, List, Optional, Set, Tuple, TypeVar, Union, cast
 
 from wn import Form
 
@@ -24,11 +27,14 @@ def install(package: str):
 if not any(re.findall(r"pytest|py.test", sys.argv[0])):
     try:
         import vim  # pylint: disable=import-error
+
+        pytest_active = False
     except Exception as e:
         print("No vim module available outside vim")
         raise e
 else:
     vim = None  # type: ignore
+    pytest_active = True
 
 # This is the quick and dirty way to get packages installed if they are not already installed
 try:
@@ -55,12 +61,10 @@ assert (
 ), f"Failed to find a Wordnet dataset for language {TARGET_LANGUAGE}"
 
 
-@dataclass
-class RelatedTerm:
-    word: str
-    definition: str
-    relation_type: str
-
+"""
+WordNet completion plugin for Vim/Neovim.
+Provides word completion and documentation based on WordNet semantic relations.
+"""
 
 # Setup language configuration
 TARGET_LANGUAGE = "en" if vim is None else vim.eval("g:wn_cmp_language")
@@ -78,6 +82,8 @@ assert (
 
 
 class WordClass(Enum):
+    """Supported word classes in WordNet."""
+
     NOUN = "n"
     VERB = "v"
     ADJECTIVE = "a"
@@ -85,16 +91,19 @@ class WordClass(Enum):
 
     @classmethod
     def from_pos(cls, pos: str) -> "WordClass":
+        """Convert WordNet POS tag to WordClass."""
         pos_map = {
             "n": cls.NOUN,
             "v": cls.VERB,
             "a": cls.ADJECTIVE,
-            "s": cls.ADJECTIVE,
+            "s": cls.ADJECTIVE,  # 's' is also used for adjectives
             "r": cls.ADVERB,
         }
         return pos_map[pos.lower()]
 
-    def to_display_name(self) -> str:
+    @property
+    def display_name(self) -> str:
+        """Get display name for the word class."""
         return self.name
 
 
@@ -102,26 +111,19 @@ class WordClass(Enum):
 class WordSense:  # pylint: disable=too-many-instance-attributes
     """Represents a single sense of a word with its relations."""
 
-    lemma: str
     word_class: WordClass
     definition: str
-    sense_number: int
-    synonyms: t.List[t.Tuple[str, str]]  # (word, definition)
-    hyponyms: t.List[t.Tuple[str, str]]  # (word, definition)
-    hypernyms: t.List[t.Tuple[str, str]]  # (word, definition)
-    meronyms: t.List[t.Tuple[str, str]]  # (word, definition)
-    troponyms: t.List[t.Tuple[str, str]]  # (word, definition)
-    similar: t.List[t.Tuple[str, str]]  # (word, definition)
+    relation_type: Optional[str] = None
+    relation_chain: Optional[Tuple[str, ...]] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class CompletionItem:
-    """A single completion item with all necessary metadata."""
+    """A completion item with all necessary metadata."""
 
     word: str
-    kind: str
-    menu: str
-    data: t.Dict[str, t.Any]
+    meta: CompletionMeta
+    documentation: str
 
 
 @dataclass(frozen=True)
@@ -144,16 +146,19 @@ class SemanticDocument:
 
 
 class WordNetCompleter:
-    def __init__(self, artefact_name: str):
-        self.wn = wn.Wordnet(artefact_name)
-        self.MAX_DEPTH = 1
+    """Provides word completions using WordNet semantic relations."""
+
+    def __init__(self, wordnet: wn.Wordnet) -> None:
+        """Initialize with a WordNet instance."""
+        self.wn = wordnet
+        self._seen_combinations: Set[Tuple[str, str]] = set()
+        self.MAX_DEPTH = 2
 
     def _normalize_word(self, word: str) -> str:
         """Normalize word for lookup."""
         word_lower = word.lower()
         word_lower_rep1 = re.sub(r"[^\x00-\x7F]+", "", word_lower)
-        word_lower_rep2 = re.sub(r"\W+", "", word_lower_rep1)
-        return word_lower_rep2
+        return re.sub(r"\W+", "", word_lower_rep1)
 
     def _get_sense_synonyms(
         self, synset: "wn.Synset"
@@ -161,7 +166,7 @@ class WordNetCompleter:
         """Get all synonyms for a specific word sense with their definitions."""
         return [(lemma, synset.definition()) for lemma in synset.lemmas()]
 
-    def _explore_synset(  # pylint: disable=too-many-branches,too-many-locals,too-many-positional-arguments
+    def _explore_synset(
         self,
         synset: "wn.Synset",
         word_class: WordClass,
@@ -185,113 +190,101 @@ class WordNetCompleter:
 
         seen_synsets.add(synset.id)
 
-        # Group definitions by word
+        # Initialize defaultdict for definitions
+        from collections import defaultdict
+
         definitions: t.Dict[str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]] = (
             defaultdict(list)
         )
+        relation_chains: t.Dict[str, t.List[RelationChain]] = defaultdict(list)
 
         # Get synonyms for this sense
-        sense_synonyms = [(lemma, synset.definition()) for lemma in synset.lemmas()]
+        sense_synonyms = [
+            (str(lemma), synset.definition()) for lemma in synset.lemmas()
+        ]
 
         # Add definition and synonyms for each lemma
         for lemma in synset.lemmas():
-            definitions[lemma].append((synset.definition(), sense_synonyms))  # type: ignore
-
-        relation_chains: t.Dict[str, t.List[RelationChain]] = defaultdict(list)
+            lemma_str = str(lemma)
+            definitions[lemma_str].append((synset.definition(), sense_synonyms))
 
         def process_related(related_synset: "wn.Synset", relation_type: str):
             for lemma in related_synset.lemmas():
-                if lemma in current_chain:
+                lemma_str = str(lemma)
+                if lemma_str in current_chain:
                     continue
 
-                new_chain = current_chain + [lemma]
+                new_chain = current_chain + [lemma_str]
                 new_relations = current_relations + [relation_type]
 
                 chain = RelationChain(
                     words=tuple(new_chain),
                     relation_types=tuple(new_relations),
-                    final_definition=related_synset.definition(),  # type: ignore
+                    final_definition=related_synset.definition(),
                 )
 
-                relation_chains[lemma].append(chain)
+                relation_chains[lemma_str].append(chain)
 
-        if word_class == WordClass.NOUN:
+                # Recursively explore if we haven't hit depth limit
+                if depth < self.MAX_DEPTH:
+                    sub_defs, sub_chains = self._explore_synset(
+                        related_synset,
+                        word_class,
+                        new_chain,
+                        new_relations,
+                        depth + 1,
+                        seen_synsets,
+                    )
+
+                    # Merge definitions and chains from recursive call
+                    for word, defs in sub_defs.items():
+                        definitions[word].extend(defs)
+                    for word, chains in sub_chains.items():
+                        relation_chains[word].extend(chains)
+
+        # Process relations based on word class
+        if word_class == WordClass.NOUN or word_class == WordClass.VERB:
             for hypernym in synset.hypernyms():
                 process_related(hypernym, "hypernym")
-
             for hyponym in synset.hyponyms():
                 process_related(hyponym, "hyponym")
-
             for meronym in synset.meronyms():
                 process_related(meronym, "member_meronym")
-
-            for holonym in synset.holonyms():
-                process_related(holonym, "member_holonym")
-
-        elif word_class == WordClass.VERB:
-            for hypernym in synset.hypernyms():
-                process_related(hypernym, "hypernym")
-
-            for hyponym in synset.hyponyms():
-                process_related(hyponym, "hyponym")
-
-            for meronym in synset.meronyms():
-                process_related(meronym, "member_meronym")
-
             for holonym in synset.holonyms():
                 process_related(holonym, "member_holonym")
 
         elif word_class == WordClass.ADJECTIVE:
-            for hypernym in synset.hypernyms():
-                process_related(hypernym, "hypernym")
-
-            for hyponym in synset.hyponyms():
-                process_related(hyponym, "hyponym")
-
-            for meronym in synset.meronyms():
-                process_related(meronym, "member_meronym")
-
-            for holonym in synset.holonyms():
-                process_related(holonym, "member_holonym")
+            for similar in getattr(synset, "similar_tos", []):
+                process_related(similar, "similar")
+            # Add other adjective-specific relations here if needed
 
         elif word_class == WordClass.ADVERB:
-            # Process adverb relations if any
-            # Direct hypernyms (more general terms)
-            for hypernym in synset.hypernyms():
-                process_related(hypernym, "hypernym")
+            # Add adverb-specific relations here if needed
+            pass
 
-            # Direct hyponyms (more specific terms)
-            for hyponym in synset.hyponyms():
-                process_related(hyponym, "hyponym")
+        return dict(definitions), dict(relation_chains)
 
-            # All types of meronyms
-            for meronym in synset.meronyms():
-                process_related(meronym, "member_meronym")
-
-            # All types of holonyms (inverse of meronyms)
-            for holonym in synset.holonyms():
-                process_related(holonym, "member_holonym")
-
-        return definitions, relation_chains
-
-    def build_semantic_document(  # pylint: disable=too-many-locals
+    def build_semantic_document(
         self, word: str, word_class: WordClass
     ) -> SemanticDocument:
         """Build a comprehensive semantic document for a word and its relations."""
+        from collections import defaultdict
+
         all_definitions: t.Dict[
             str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]
         ] = defaultdict(list)
         all_chains: t.Dict[str, t.List[RelationChain]] = defaultdict(list)
 
         # Collect definitions from all synsets
-        for synset in self.wn.synsets(word, pos=word_class.value):
+        synsets = self.wn.synsets(word, pos=word_class.value)
+        for synset in synsets:
             definitions, chains = self._explore_synset(
                 synset,
                 word_class,
-                current_chain=[word],  # type: ignore
-                current_relations=[],  # type: ignore
+                [word],
+                [],
                 depth=0,
-                seen_synsets=set(),  # type: ignore
+                seen_synsets=set(),
             )
 
             # Merge definitions
@@ -302,26 +295,31 @@ class WordNetCompleter:
             for target_word, word_chains in chains.items():
                 all_chains[target_word].extend(word_chains)
 
-        # Remove duplicates while preserving order
-        deduplicated_definitions: t.Dict[
-            str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]
-        ] = {}
-        for word_key, defs in all_definitions.items():
-            # Use a set to track unique definitions
-            seen_defs = set()
-            unique_defs = []
-            for definition, synonyms in defs:
-                if definition not in seen_defs:
-                    seen_defs.add(definition)
-                    unique_defs.append((definition, synonyms))
-            deduplicated_definitions[word_key] = unique_defs
-
         return SemanticDocument(
             primary_word=word,
             word_class=word_class,
-            definitions=deduplicated_definitions,  # pylint: disable=no-member
+            definitions=dict(all_definitions),
             relation_chains=dict(all_chains),
         )
+
+    def get_completions(self, word: str) -> t.List[t.Dict[str, t.Any]]:
+        """Get completions for a word with comprehensive semantic information."""
+        if not word or len(word) < 2:
+            return []
+
+        normalized = self._normalize_word(word)
+        completions = []
+        self._seen_combinations.clear()
+
+        # Process each word class
+        for word_class in WordClass:
+            # Build semantic document for this word class
+            doc = self.build_semantic_document(normalized, word_class)
+            if doc.definitions:  # Only process if we found any meanings
+                # Convert to completion items
+                completions.extend(self.format_completion_items(doc))
+
+        return completions
 
     def _format_documentation(
         self,
@@ -330,7 +328,7 @@ class WordNetCompleter:
         senses: t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]],
     ) -> str:
         """Format the documentation to show all senses and their synonyms."""
-        doc_parts = [f"# {word} [{word_class.to_display_name()}]\n"]
+        doc_parts = [f"# {word} [{word_class.display_name}]\n"]
 
         for idx, (definition, synonyms) in enumerate(senses, 1):
             # Add sense number and definition
@@ -365,7 +363,7 @@ class WordNetCompleter:
                 seen_combinations.add(key)
 
                 # Simple menu text
-                menu_text = f"[{doc.word_class.to_display_name()}]"
+                menu_text = f"[{doc.word_class.display_name}]"
 
                 # Create documentation with all senses and synonyms
                 doc_text = self._format_documentation(
@@ -375,10 +373,10 @@ class WordNetCompleter:
                 items.append(
                     {
                         "word": word,
-                        "kind": doc.word_class.to_display_name(),
+                        "kind": doc.word_class.display_name,
                         "menu": menu_text,
                         "data": {
-                            "word_class": doc.word_class.to_display_name(),
+                            "word_class": doc.word_class.display_name,
                             "type": "main",
                             "definitions": senses,
                         },
@@ -413,15 +411,15 @@ class WordNetCompleter:
                     )
 
                     # Simple menu text for relations
-                    menu_text = f"[{doc.word_class.to_display_name()}:{marker}]"
+                    menu_text = f"[{doc.word_class.display_name}:{marker}]"
 
                     items.append(
                         {
                             "word": target_word,
-                            "kind": f"{doc.word_class.to_display_name()}:{marker}",
+                            "kind": f"{doc.word_class.display_name}:{marker}",
                             "menu": menu_text,
                             "data": {
-                                "word_class": doc.word_class.to_display_name(),
+                                "word_class": doc.word_class.display_name,
                                 "type": relation_type,
                                 "chain": list(chain.words),
                                 "relations": list(chain.relation_types),
@@ -430,7 +428,7 @@ class WordNetCompleter:
                             "documentation": {
                                 "kind": "markdown",
                                 "value": (
-                                    f"# {target_word} [{doc.word_class.to_display_name()}]\n\n"
+                                    f"# {target_word} [{doc.word_class.display_name}]\n\n"
                                     f"{chain.final_definition}\n\n"
                                     f"**{desc}** of: {doc.primary_word}\n"
                                     f"Chain: {' → '.join(chain.words)}"
@@ -441,28 +439,71 @@ class WordNetCompleter:
 
         return items
 
-    def get_word_completions(self, word: str) -> t.List[t.Dict[str, t.Any]]:
-        """Get completions for a word with comprehensive semantic information."""
-        if not word or len(word) < 2:
-            return []
 
-        normalized = self._normalize_word(word)
-        completions = []
+if pytest_active:
+    import pytest
 
-        # Process each word class
-        for word_class in WordClass:
-            # Build semantic document for this word class
-            doc = self.build_semantic_document(normalized, word_class)
-            if doc.definitions:  # Only process if we found any meanings
-                # Convert to completion items
-                completions.extend(self.format_completion_items(doc))  # type: ignore
+    @pytest.fixture
+    def wordnet_mock():
+        """Create a mock WordNet instance for testing."""
 
-        return completions
+        class MockSynset:
+            def definition(self):
+                return "test definition"
 
+            def lemmas(self):
+                return ["test", "example"]
+
+            def hypernyms(self):
+                return []
+
+            def hyponyms(self):
+                return []
+
+            def meronyms(self):
+                return []
+
+            def holonyms(self):
+                return []
+
+        class MockWordNet:
+            def synsets(
+                self, word: str, pos: str
+            ) -> List[MockSynset]:  # pylint: disable
+                return [MockSynset()]
+
+        return MockWordNet()
+
+    def test_normalize_word():
+        """Test word normalization."""
+        completer = WordNetCompleter(wordnet_mock())  # type: ignore
+        assert completer._normalize_word("Test-Word") == "testword"
+        assert completer._normalize_word("Testé") == "test"
+        assert completer._normalize_word("test_word") == "testword"
+
+    def test_empty_input():
+        """Test handling of empty input."""
+        completer = WordNetCompleter(wordnet_mock())  # type: ignore
+        assert completer.get_completions("") == []
+        assert completer.get_completions("a") == []
+
+    def test_basic_completion(wordnet_mock):
+        """Test basic completion functionality."""
+        completer = WordNetCompleter(wordnet_mock)
+        completions = completer.get_completions("test")
+        assert len(completions) > 0
+        completion = completions[0]
+        assert "word" in completion
+        assert "kind" in completion
+        assert "menu" in completion
+        assert "documentation" in completion
+
+else:
+    pass
 
 try:
     # Global instance of the completer
-    completer = WordNetCompleter(ARTEFACT_NAME)
+    completer = WordNetCompleter(wn.Wordnet(ARTEFACT_NAME))
 
 except Exception as e:  # pylint: disable=broad-except
     subprocess.check_call(
@@ -475,9 +516,9 @@ except Exception as e:  # pylint: disable=broad-except
         ]
     )
     # Global instance of the completer
-    completer = WordNetCompleter(ARTEFACT_NAME)
+    completer = WordNetCompleter(wn.Wordnet(ARTEFACT_NAME))
 
 
 def wordnet_complete(base: str) -> t.List[t.Dict[str, t.Any]]:
     """Main completion function to be called from Vim/Lua."""
-    return completer.get_word_completions(base)
+    return completer.get_completions(base)
