@@ -61,11 +61,6 @@ assert (
 ), f"Failed to find a Wordnet dataset for language {TARGET_LANGUAGE}"
 
 
-"""
-WordNet completion plugin for Vim/Neovim.
-Provides word completion and documentation based on WordNet semantic relations.
-"""
-
 # Setup language configuration
 TARGET_LANGUAGE = "en" if vim is None else vim.eval("g:wn_cmp_language")
 
@@ -118,15 +113,6 @@ class WordSense:  # pylint: disable=too-many-instance-attributes
 
 
 @dataclass(frozen=True)
-class CompletionItem:
-    """A completion item with all necessary metadata."""
-
-    word: str
-    meta: CompletionMeta
-    documentation: str
-
-
-@dataclass(frozen=True)
 class RelationChain:
     """Represents a chain of semantic relations."""
 
@@ -162,11 +148,11 @@ class WordNetCompleter:
 
     def _get_sense_synonyms(
         self, synset: "wn.Synset"
-    ) -> t.List[t.Tuple[Form, str, None]]:
+    ) -> t.List[t.Tuple[Form, t.Optional[str]]]:
         """Get all synonyms for a specific word sense with their definitions."""
         return [(lemma, synset.definition()) for lemma in synset.lemmas()]
 
-    def _explore_synset(
+    def _explore_synset(  # pylint: disable=too-many-positional-arguments, too-many-locals,
         self,
         synset: "wn.Synset",
         word_class: WordClass,
@@ -191,8 +177,6 @@ class WordNetCompleter:
         seen_synsets.add(synset.id)
 
         # Initialize defaultdict for definitions
-        from collections import defaultdict
-
         definitions: t.Dict[str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]] = (
             defaultdict(list)
         )
@@ -206,7 +190,7 @@ class WordNetCompleter:
         # Add definition and synonyms for each lemma
         for lemma in synset.lemmas():
             lemma_str = str(lemma)
-            definitions[lemma_str].append((synset.definition(), sense_synonyms))
+            definitions[lemma_str].append((synset.definition(), sense_synonyms))  # type: ignore
 
         def process_related(related_synset: "wn.Synset", relation_type: str):
             for lemma in related_synset.lemmas():
