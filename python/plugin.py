@@ -480,8 +480,12 @@ if pytest_active:
     def test_empty_input():
         """Test handling of empty input."""
         test_completer = WordNetCompleter(wordnet_mock())  # type: ignore
-        assert test_completer.get_completions("") == []
-        assert test_completer.get_completions("a") == []
+        assert (
+            test_completer.get_completions("") == []
+        )  # pylint: disable=use-implicit-booleaness-not-comparison
+        assert (
+            test_completer.get_completions("a") == []
+        )  # pylint: disable=use-implicit-booleaness-not-comparison
 
     def test_basic_completion(wordnet_mock):  # pylint: disable=redefined-outer-name
         """Test basic completion functionality."""
