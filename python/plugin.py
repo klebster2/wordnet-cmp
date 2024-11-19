@@ -11,10 +11,6 @@ import typing as t
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
-from functools import lru_cache
-from typing import Dict, List, Optional, Set, Tuple, TypeVar, Union, cast
-
-from wn import Form
 
 # Append to path local wordsense.py
 sys.path.append(".")
@@ -39,9 +35,11 @@ else:
 # This is the quick and dirty way to get packages installed if they are not already installed
 try:
     import wn
+    from wn import Form
 except ImportError:
     install("wn")
     import wn
+    from wn import Form
 
 if vim is None:
     # pytest is running
@@ -227,7 +225,10 @@ class WordNetCompleter:
                         relation_chains[word].extend(chains)
 
         # Process relations based on word class
-        if word_class == WordClass.NOUN or word_class == WordClass.VERB:
+        if (
+            word_class == WordClass.NOUN  # pylint: disable=consider-using-in
+            or word_class == WordClass.VERB  # pylint: disable=consider-using-in
+        ):
             for hypernym in synset.hypernyms():
                 process_related(hypernym, "hypernym")
             for hyponym in synset.hyponyms():
@@ -252,8 +253,6 @@ class WordNetCompleter:
         self, word: str, word_class: WordClass
     ) -> SemanticDocument:
         """Build a comprehensive semantic document for a word and its relations."""
-        from collections import defaultdict
-
         all_definitions: t.Dict[
             str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]
         ] = defaultdict(list)
