@@ -106,8 +106,8 @@ class WordSense:  # pylint: disable=too-many-instance-attributes
 
     word_class: WordClass
     definition: str
-    relation_type: Optional[str] = None
-    relation_chain: Optional[Tuple[str, ...]] = None
+    relation_type: t.Optional[str] = None
+    relation_chain: t.Optional[t.Tuple[str, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -135,7 +135,7 @@ class WordNetCompleter:
     def __init__(self, wordnet: wn.Wordnet) -> None:
         """Initialize with a WordNet instance."""
         self.wn = wordnet
-        self._seen_combinations: Set[Tuple[str, str]] = set()
+        self._seen_combinations: t.Set[t.Tuple[str, str]] = set()
         self.MAX_DEPTH = 2
 
     def _normalize_word(self, word: str) -> str:
@@ -451,29 +451,42 @@ if pytest_active:
 
         class MockWordNet:
             def synsets(
-                self, word: str, pos: str
-            ) -> List[MockSynset]:  # pylint: disable
+                self, word: str, pos: str  # pylint: disable=unused-argument
+            ) -> t.List[MockSynset]:
                 return [MockSynset()]
 
         return MockWordNet()
 
     def test_normalize_word():
         """Test word normalization."""
-        completer = WordNetCompleter(wordnet_mock())  # type: ignore
-        assert completer._normalize_word("Test-Word") == "testword"
-        assert completer._normalize_word("Testé") == "test"
-        assert completer._normalize_word("test_word") == "testword"
+        test_completer = WordNetCompleter(wordnet_mock())  # type: ignore
+        assert (
+            test_completer._normalize_word(  # pylint: disable=protected-access
+                "Test-Word"
+            )
+            == "testword"
+        )
+        assert (
+            test_completer._normalize_word("Testé")  # pylint: disable=protected-access
+            == "test"
+        )
+        assert (
+            test_completer._normalize_word(  # pylint: disable=protected-access
+                "test_word"
+            )
+            == "testword"
+        )
 
     def test_empty_input():
         """Test handling of empty input."""
-        completer = WordNetCompleter(wordnet_mock())  # type: ignore
-        assert completer.get_completions("") == []
-        assert completer.get_completions("a") == []
+        test_completer = WordNetCompleter(wordnet_mock())  # type: ignore
+        assert test_completer.get_completions("") == []
+        assert test_completer.get_completions("a") == []
 
-    def test_basic_completion(wordnet_mock):
+    def test_basic_completion(wordnet_mock):  # pylint: disable=redefined-outer-name
         """Test basic completion functionality."""
-        completer = WordNetCompleter(wordnet_mock)
-        completions = completer.get_completions("test")
+        test_completer = WordNetCompleter(wordnet_mock)
+        completions = test_completer.get_completions("test")
         assert len(completions) > 0
         completion = completions[0]
         assert "word" in completion
