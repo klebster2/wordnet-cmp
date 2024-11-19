@@ -150,7 +150,7 @@ class WordNetCompleter:
         """Get all synonyms for a specific word sense with their definitions."""
         return [(lemma, synset.definition()) for lemma in synset.lemmas()]
 
-    def _explore_synset(  # pylint: disable=too-many-locals,too-many-positional-arguments
+    def _explore_synset(  # pylint: disable=too-many-locals,R0917
         self,
         synset: "wn.Synset",
         word_class: WordClass,
