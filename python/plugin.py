@@ -460,9 +460,8 @@ if pytest_active:
 
         return MockWordNet()
 
-    def test_normalize_word():
+    def test_normalize_word(test_completer):  # pylint: disable=redefined-outer-name
         """Test word normalization."""
-        test_completer = WordNetCompleter(wordnet_mock())  # type: ignore
         assert (
             test_completer._normalize_word(  # pylint: disable=protected-access
                 "Test-Word"
@@ -480,15 +479,18 @@ if pytest_active:
             == "testword"
         )
 
-    def test_empty_input():
+    @pytest.fixture
+    def test_completer(wordnet_mock):  # pylint: disable=redefined-outer-name
+        """Create a WordNetCompleter instance for testing."""
+        return WordNetCompleter(wordnet_mock)
+
+    def test_empty_input(test_completer):  # pylint: disable=redefined-outer-name
         """Test handling of empty input."""
-        test_completer = WordNetCompleter(wordnet_mock())  # type: ignore
         assert not test_completer.get_completions("")
         assert not test_completer.get_completions("a")
 
-    def test_basic_completion(wordnet_mock):  # pylint: disable=redefined-outer-name
+    def test_basic_completion(test_completer):  # pylint: disable=redefined-outer-name
         """Test basic completion functionality."""
-        test_completer = WordNetCompleter(wordnet_mock)
         completions = test_completer.get_completions("test")
         assert len(completions) > 0
         completion = completions[0]
