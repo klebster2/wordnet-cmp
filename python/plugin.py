@@ -476,7 +476,7 @@ if pytest_active:
             test_completer._normalize_word(  # pylint: disable=protected-access
                 "test_word"
             )
-            == "testword"
+            == "test_word"
         )
 
     @pytest.fixture
