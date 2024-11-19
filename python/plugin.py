@@ -1,6 +1,6 @@
 # Title:        wordnet-cmp
 # Description:  A plugin to help users Define, Use, and Research words.
-# Last Change:  14th November 2024
+# Last Change:  19th November 2024
 # Maintainer:   klebster2 <https://github.com/klebster2>
 from __future__ import annotations
 
