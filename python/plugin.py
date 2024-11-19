@@ -431,6 +431,9 @@ if pytest_active:
         """Create a mock WordNet instance for testing."""
 
         class MockSynset:
+            def __init__(self):
+                self.id = "test.n.01"  # Add mock synset ID
+
             def definition(self):
                 return "test definition"
 
