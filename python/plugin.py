@@ -129,6 +129,205 @@ class SemanticDocument:
     relation_chains: t.Dict[str, t.List[RelationChain]]
 
 
+import itertools
+from collections.abc import Iterator, Sequence
+from typing import Optional, cast
+
+import wn
+from wn._db import connect
+
+_Form = tuple[str, Optional[str], Optional[str], int]  # form  # id  # script  # rowid
+
+_Word = tuple[
+    str,  # id
+    str,  # pos
+    list[_Form],  # forms
+    int,  # lexid
+    int,  # rowid
+]
+
+
+def find_entries(
+    id: Optional[str] = None,
+    forms: Sequence[str] = (),
+    pos: Optional[str] = None,
+    lexicon_rowids: Sequence[int] = (),
+    normalized: bool = False,
+    search_all_forms: bool = False,
+    prefix_search: bool = False,  # New parameter
+) -> Iterator[_Word]:
+    """
+    Find lexical entries in the database.
+
+    Args:
+        prefix_search: If True, matches words that start with the given forms
+    """
+    conn = connect()
+    cte = ""
+    params: list = []
+    conditions = []
+
+    if id:
+        conditions.append("e.id = ?")
+        params.append(id)
+
+    if forms:
+        if prefix_search:
+            # Convert forms into LIKE patterns for prefix matching
+            like_patterns = [f"{form}%" for form in forms]
+            cte = f"WITH wordforms(s) AS (VALUES {_vs(like_patterns)})"
+            or_norm = "OR normalized_form LIKE wordforms.s" if normalized else ""
+            and_rank = "" if search_all_forms else "AND rank = 0"
+            conditions.append(
+                f"""
+                e.rowid IN
+                   (SELECT entry_rowid
+                      FROM forms
+                     WHERE (form LIKE wordforms.s {or_norm}) {and_rank})
+            """.strip()
+            )
+            params.extend(like_patterns)
+        else:
+            # Original exact matching behavior
+            cte = f"WITH wordforms(s) AS (VALUES {_vs(forms)})"
+            or_norm = "OR normalized_form IN wordforms" if normalized else ""
+            and_rank = "" if search_all_forms else "AND rank = 0"
+            conditions.append(
+                f"""
+                e.rowid IN
+                   (SELECT entry_rowid
+                      FROM forms
+                     WHERE (form IN wordforms {or_norm}) {and_rank})
+            """.strip()
+            )
+            params.extend(forms)
+
+    if pos:
+        conditions.append("e.pos = ?")
+        params.append(pos)
+
+    if lexicon_rowids:
+        conditions.append(f"e.lexicon_rowid IN ({_qs(lexicon_rowids)})")
+        params.extend(lexicon_rowids)
+
+    condition = ""
+    if conditions:
+        condition = "WHERE " + "\n           AND ".join(conditions)
+
+    # Add index hint for prefix search
+    index_hint = ""
+    if prefix_search and forms:
+        index_hint = "INDEXED BY forms_form_idx"  # Assuming this index exists
+
+    query = f"""
+          {cte}
+        SELECT DISTINCT e.lexicon_rowid, e.rowid, e.id, e.pos,
+                        f.form, f.id, f.script, f.rowid
+          FROM entries AS e
+          JOIN forms AS f {index_hint} ON f.entry_rowid = e.rowid
+         {condition}
+         ORDER BY e.rowid, e.id, f.rank
+    """
+
+    rows: Iterator[
+        tuple[int, int, str, str, str, Optional[str], Optional[str], int]
+    ] = conn.execute(query, params)
+
+    groupby = itertools.groupby
+    for key, group in groupby(rows, lambda row: row[0:4]):
+        lexid, rowid, _id, _pos = cast(tuple[int, int, str, str], key)
+        wordforms = [(row[4], row[5], row[6], row[7]) for row in group]
+        yield (_id, _pos, wordforms, lexid, rowid)
+
+
+from wn._queries import _qs, _Synset, _vs
+
+
+def find_synsets_w_suffix(
+    id: Optional[str] = None,
+    forms: Sequence[str] = (),
+    pos: Optional[str] = None,
+    ili: Optional[str] = None,
+    lexicon_rowids: Sequence[int] = (),
+    normalized: bool = False,
+    search_all_forms: bool = False,
+    prefix_search: bool = False,
+) -> Iterator[_Synset]:
+    conn = connect()
+    cte = ""
+    join = ""
+    conditions = []
+    order = ""
+    params: list = []
+
+    if id:
+        conditions.append("ss.id = ?")
+        params.append(id)
+
+    if forms:
+        if prefix_search:
+            like_patterns = [f"{form}%" for form in forms]
+            cte = f"WITH wordforms(s) AS (VALUES {_vs(like_patterns)})"
+            or_norm = "OR normalized_form LIKE wordforms.s" if normalized else ""
+            and_rank = "" if search_all_forms else "AND rank = 0"
+            join = f"""\
+              JOIN (SELECT s.entry_rowid, s.synset_rowid, s.entry_rank
+                      FROM forms AS f
+                      JOIN senses AS s ON s.entry_rowid = f.entry_rowid
+                     WHERE (f.form LIKE wordforms.s {or_norm}) {and_rank}) AS s
+                ON s.synset_rowid = ss.rowid
+            """.strip()
+            params.extend(like_patterns)
+        else:
+            cte = f"WITH wordforms(s) AS (VALUES {_vs(forms)})"
+            or_norm = "OR normalized_form IN wordforms" if normalized else ""
+            and_rank = "" if search_all_forms else "AND rank = 0"
+            join = f"""\
+              JOIN (SELECT s.entry_rowid, s.synset_rowid, s.entry_rank
+                      FROM forms AS f
+                      JOIN senses AS s ON s.entry_rowid = f.entry_rowid
+                     WHERE (f.form IN wordforms {or_norm}) {and_rank}) AS s
+                ON s.synset_rowid = ss.rowid
+            """.strip()
+            params.extend(forms)
+        order = "ORDER BY s.entry_rowid, s.entry_rank"
+
+    if pos:
+        conditions.append("ss.pos = ?")
+        params.append(pos)
+
+    if ili:
+        conditions.append(
+            "ss.ili_rowid IN (SELECT ilis.rowid FROM ilis WHERE ilis.id = ?)"
+        )
+        params.append(ili)
+
+    if lexicon_rowids:
+        conditions.append(f"ss.lexicon_rowid IN ({_qs(lexicon_rowids)})")
+        params.extend(lexicon_rowids)
+
+    condition = ""
+    if conditions:
+        condition = "WHERE " + "\n           AND ".join(conditions)
+
+    query = f"""
+          {cte}
+        SELECT DISTINCT ss.id, ss.pos,
+                        (SELECT ilis.id FROM ilis WHERE ilis.rowid=ss.ili_rowid),
+                        ss.lexicon_rowid, ss.rowid
+          FROM synsets AS ss
+          {join}
+         {condition}
+         {order}
+    """
+
+    rows: Iterator[_Synset] = conn.execute(query, params)
+    yield from rows
+
+
+_find_helper(self, Synset, find_synsets_w_suffix)
+
+
 class WordNetCompleter:
     """Provides word completions using WordNet semantic relations."""
 
