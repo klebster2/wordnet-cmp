@@ -9,16 +9,29 @@ import subprocess
 import sys
 import typing as t
 from collections import defaultdict
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 # Append to path local wordsense.py
 sys.path.append(".")
 
 
-def install(package: str):
+def _pip_install(package: str = "wn"):
     subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
+
+try:
+    import wn
+except ImportError:
+    _pip_install("wn")
+    import wn
+
+from wn import Form  # pylint: disable=wrong-import-position
+from wn._db import connect  # pylint: disable=wrong-import-position
+from wn._queries import (_qs, _Synset,  # pylint: disable=wrong-import-position
+                         _vs)
 
 if not any(re.findall(r"pytest|py.test", sys.argv[0])):
     try:
@@ -32,46 +45,21 @@ else:
     vim = None  # type: ignore
     pytest_active = True
 
-# This is the quick and dirty way to get packages installed if they are not already installed
-try:
-    import wn
-    from wn import Form
-except ImportError:
-    install("wn")
-    import wn
-    from wn import Form
+ARTEFACT_NAME: str = ""
+TARGET_LANGUAGE = "en" if (vim is None) else vim.eval("g:wn_cmp_language")  # type: ignore
 
-if vim is None:
-    # pytest is running
-    TARGET_LANGUAGE = "en"
-else:
-    TARGET_LANGUAGE = vim.eval("g:wn_cmp_language")  # type: ignore
-
-ARTEFACT_NAME: t.Optional[str] = None
 for dataset_name, item in wn.config.index.items():
     if item.get("language") == TARGET_LANGUAGE:
         ARTEFACT_NAME = dataset_name + ":" + list(item["versions"].keys())[0]
-        print(ARTEFACT_NAME)
         break
 
 assert (
-    ARTEFACT_NAME is not None
+    ARTEFACT_NAME != ""
 ), f"Failed to find a Wordnet dataset for language {TARGET_LANGUAGE}"
 
 
 # Setup language configuration
 TARGET_LANGUAGE = "en" if vim is None else vim.eval("g:wn_cmp_language")
-
-# Find appropriate WordNet dataset
-ARTEFACT_NAME: t.Optional[str] = None
-for dataset_name, item in wn.config.index.items():
-    if item.get("language") == TARGET_LANGUAGE:
-        ARTEFACT_NAME = dataset_name + ":" + list(item["versions"].keys())[0]
-        break
-
-assert (
-    ARTEFACT_NAME is not None
-), f"Failed to find a WordNet dataset for language {TARGET_LANGUAGE}"
 
 
 class WordClass(Enum):
@@ -124,540 +112,350 @@ class SemanticDocument:
     """A document containing all semantic information for a word and its related terms."""
 
     primary_word: str
-    word_class: WordClass
     definitions: t.Dict[str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]]
     relation_chains: t.Dict[str, t.List[RelationChain]]
 
 
-import itertools
-from collections.abc import Iterator, Sequence
-from typing import Optional, cast
-
-import wn
-from wn._db import connect
-
 _Form = tuple[str, Optional[str], Optional[str], int]  # form  # id  # script  # rowid
 
-_Word = tuple[
-    str,  # id
-    str,  # pos
-    list[_Form],  # forms
-    int,  # lexid
-    int,  # rowid
-]
+
+class CustomSynset(wn.Synset):
+    """Custom Synset class that handles lexicon IDs properly."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lexicon_id = None
+
+    def _get_lexicon_ids(self) -> t.Tuple[int]:
+        """Override to avoid lexicon extension lookup."""
+        if self._lexicon_id is not None:
+            return (self._lexicon_id,)
+        return (self._lexid,)
 
 
-def find_entries(
-    id: Optional[str] = None,
-    forms: Sequence[str] = (),
-    pos: Optional[str] = None,
-    lexicon_rowids: Sequence[int] = (),
-    normalized: bool = False,
-    search_all_forms: bool = False,
-    prefix_search: bool = False,  # New parameter
-) -> Iterator[_Word]:
-    """
-    Find lexical entries in the database.
+class CustomWordnet(wn.Wordnet):
+    """Custom Wordnet class with prefix search capabilities."""
 
-    Args:
-        prefix_search: If True, matches words that start with the given forms
-    """
-    conn = connect()
-    cte = ""
-    params: list = []
-    conditions = []
+    def __init__(self, lexicon: str):
+        super().__init__(lexicon)
+        self._lexicon = self._lexicons[0]
+        self._lexid = self._lexicon._id
 
-    if id:
-        conditions.append("e.id = ?")
-        params.append(id)
+    def _get_lexicon_ids(self) -> t.Tuple[int]:
+        """Override to return a proper set of integer IDs."""
+        return (self._lexid,)
 
-    if forms:
-        if prefix_search:
-            # Convert forms into LIKE patterns for prefix matching
-            like_patterns = [f"{form}%" for form in forms]
-            cte = f"WITH wordforms(s) AS (VALUES {_vs(like_patterns)})"
-            or_norm = "OR normalized_form LIKE wordforms.s" if normalized else ""
-            and_rank = "" if search_all_forms else "AND rank = 0"
-            conditions.append(
-                f"""
-                e.rowid IN
-                   (SELECT entry_rowid
-                      FROM forms
-                     WHERE (form LIKE wordforms.s {or_norm}) {and_rank})
-            """.strip()
+    def get_lexicon_id(self) -> int:
+        """Return the lexicon ID for external use."""
+        return self._lexid
+
+    def synsets(
+        self,
+        form: Optional[str] = None,
+        pos: Optional[str] = None,
+        ili: Optional[str] = None,
+        lexicon: Optional[str] = None,
+        normalized: bool = False,
+        search_all_forms: bool = True,
+        prefix_search: bool = True,
+    ) -> list[wn.Synset]:
+        """Get synsets with prefix search support."""
+        if form is not None and prefix_search:
+            results = list(
+                self.find_synsets_prefix(
+                    forms=[form],
+                    pos=pos,
+                    ili=ili,
+                    normalized=normalized,
+                    search_all_forms=search_all_forms,
+                )
             )
-            params.extend(like_patterns)
-        else:
-            # Original exact matching behavior
-            cte = f"WITH wordforms(s) AS (VALUES {_vs(forms)})"
-            or_norm = "OR normalized_form IN wordforms" if normalized else ""
-            and_rank = "" if search_all_forms else "AND rank = 0"
-            conditions.append(
-                f"""
-                e.rowid IN
-                   (SELECT entry_rowid
-                      FROM forms
-                     WHERE (form IN wordforms {or_norm}) {and_rank})
-            """.strip()
-            )
-            params.extend(forms)
 
-    if pos:
-        conditions.append("e.pos = ?")
-        params.append(pos)
+            synsets = []
+            for data in results:
+                synset = CustomSynset(data[0], data[1], data[2], self)
+                synset._lexicon_id = self._lexid
+                synsets.append(synset)
+            return synsets
 
-    if lexicon_rowids:
-        conditions.append(f"e.lexicon_rowid IN ({_qs(lexicon_rowids)})")
-        params.extend(lexicon_rowids)
-
-    condition = ""
-    if conditions:
-        condition = "WHERE " + "\n           AND ".join(conditions)
-
-    # Add index hint for prefix search
-    index_hint = ""
-    if prefix_search and forms:
-        index_hint = "INDEXED BY forms_form_idx"  # Assuming this index exists
-
-    query = f"""
-          {cte}
-        SELECT DISTINCT e.lexicon_rowid, e.rowid, e.id, e.pos,
-                        f.form, f.id, f.script, f.rowid
-          FROM entries AS e
-          JOIN forms AS f {index_hint} ON f.entry_rowid = e.rowid
-         {condition}
-         ORDER BY e.rowid, e.id, f.rank
-    """
-
-    rows: Iterator[
-        tuple[int, int, str, str, str, Optional[str], Optional[str], int]
-    ] = conn.execute(query, params)
-
-    groupby = itertools.groupby
-    for key, group in groupby(rows, lambda row: row[0:4]):
-        lexid, rowid, _id, _pos = cast(tuple[int, int, str, str], key)
-        wordforms = [(row[4], row[5], row[6], row[7]) for row in group]
-        yield (_id, _pos, wordforms, lexid, rowid)
-
-
-from wn._queries import _qs, _Synset, _vs
-
-
-def find_synsets_w_suffix(
-    id: Optional[str] = None,
-    forms: Sequence[str] = (),
-    pos: Optional[str] = None,
-    ili: Optional[str] = None,
-    lexicon_rowids: Sequence[int] = (),
-    normalized: bool = False,
-    search_all_forms: bool = False,
-    prefix_search: bool = False,
-) -> Iterator[_Synset]:
-    conn = connect()
-    cte = ""
-    join = ""
-    conditions = []
-    order = ""
-    params: list = []
-
-    if id:
-        conditions.append("ss.id = ?")
-        params.append(id)
-
-    if forms:
-        if prefix_search:
-            like_patterns = [f"{form}%" for form in forms]
-            cte = f"WITH wordforms(s) AS (VALUES {_vs(like_patterns)})"
-            or_norm = "OR normalized_form LIKE wordforms.s" if normalized else ""
-            and_rank = "" if search_all_forms else "AND rank = 0"
-            join = f"""\
-              JOIN (SELECT s.entry_rowid, s.synset_rowid, s.entry_rank
-                      FROM forms AS f
-                      JOIN senses AS s ON s.entry_rowid = f.entry_rowid
-                     WHERE (f.form LIKE wordforms.s {or_norm}) {and_rank}) AS s
-                ON s.synset_rowid = ss.rowid
-            """.strip()
-            params.extend(like_patterns)
-        else:
-            cte = f"WITH wordforms(s) AS (VALUES {_vs(forms)})"
-            or_norm = "OR normalized_form IN wordforms" if normalized else ""
-            and_rank = "" if search_all_forms else "AND rank = 0"
-            join = f"""\
-              JOIN (SELECT s.entry_rowid, s.synset_rowid, s.entry_rank
-                      FROM forms AS f
-                      JOIN senses AS s ON s.entry_rowid = f.entry_rowid
-                     WHERE (f.form IN wordforms {or_norm}) {and_rank}) AS s
-                ON s.synset_rowid = ss.rowid
-            """.strip()
-            params.extend(forms)
-        order = "ORDER BY s.entry_rowid, s.entry_rank"
-
-    if pos:
-        conditions.append("ss.pos = ?")
-        params.append(pos)
-
-    if ili:
-        conditions.append(
-            "ss.ili_rowid IN (SELECT ilis.rowid FROM ilis WHERE ilis.id = ?)"
+        # For non-prefix searches, convert regular synsets to custom ones
+        original_synsets = super().synsets(
+            form=form,
+            pos=pos,
+            ili=ili,
+            lexicon=lexicon,
+            normalized=normalized,
+            search_all_forms=search_all_forms,
         )
-        params.append(ili)
 
-    if lexicon_rowids:
-        conditions.append(f"ss.lexicon_rowid IN ({_qs(lexicon_rowids)})")
-        params.extend(lexicon_rowids)
+        return [
+            CustomSynset(s.id, s.pos, s.ili, self, _lexicon_id=self._lexid)
+            for s in original_synsets
+        ]
 
-    condition = ""
-    if conditions:
-        condition = "WHERE " + "\n           AND ".join(conditions)
+    def find_synsets_prefix(
+        self,
+        id: Optional[str] = None,
+        forms: Sequence[str] = (),
+        pos: Optional[str] = None,
+        ili: Optional[str] = None,
+        normalized: bool = False,
+        search_all_forms: bool = False,
+    ) -> Iterator[_Synset]:
+        """Find synsets with prefix matching for forms."""
+        conn = connect()
+        params: list = []
 
-    query = f"""
-          {cte}
-        SELECT DISTINCT ss.id, ss.pos,
-                        (SELECT ilis.id FROM ilis WHERE ilis.rowid=ss.ili_rowid),
-                        ss.lexicon_rowid, ss.rowid
-          FROM synsets AS ss
-          {join}
-         {condition}
-         {order}
-    """
+        query_parts = [
+            "SELECT DISTINCT",
+            "    ss.id,",
+            "    ss.pos,",
+            "    (SELECT ilis.id FROM ilis WHERE ilis.rowid = ss.ili_rowid) as ili_id,",
+            "    ss.lexicon_rowid,",
+            "    ss.rowid",
+            "FROM synsets ss",
+        ]
 
-    rows: Iterator[_Synset] = conn.execute(query, params)
-    yield from rows
+        conditions = [f"ss.lexicon_rowid = {self._lexid}"]
 
+        if forms:
+            query_parts.extend(
+                [
+                    "JOIN senses s ON s.synset_rowid = ss.rowid",
+                    "JOIN forms f ON f.entry_rowid = s.entry_rowid",
+                ]
+            )
 
-_find_helper(self, Synset, find_synsets_w_suffix)
+            form_conditions = []
+            for form in forms:
+                form_conditions.append("LOWER(f.form) LIKE LOWER(?)")
+                params.append(f"{form}%")
+
+            conditions.append(f"({' OR '.join(form_conditions)})")
+
+        if pos:
+            conditions.append("ss.pos = ?")
+            params.append(pos)
+
+        if ili:
+            conditions.append("ss.ili_rowid IN (SELECT rowid FROM ilis WHERE id = ?)")
+            params.append(ili)
+
+        query_parts.append(f"WHERE {' AND '.join(conditions)}")
+        query_parts.append("ORDER BY ss.id")
+
+        query = "\n".join(query_parts)
+
+        return conn.execute(query, params)
 
 
 class WordNetCompleter:
     """Provides word completions using WordNet semantic relations."""
 
-    def __init__(self, wordnet: wn.Wordnet) -> None:
+    def __init__(self, wordnet: CustomWordnet) -> None:
         """Initialize with a WordNet instance."""
         self.wn = wordnet
-        self._seen_combinations: t.Set[t.Tuple[str, str]] = set()
-        self.MAX_DEPTH = 2
+        self._cache: t.Dict[str, SemanticDocument] = {}  # Cache for semantic documents
+        self.MAX_DEPTH = 1
 
     def _normalize_word(self, word: str) -> str:
         """Normalize word for lookup."""
-        word_lower = word.lower()
-        word_lower_rep1 = re.sub(r"[^\x00-\x7F]+", "", word_lower)
-        return re.sub(r"\W+", "", word_lower_rep1)
+        return re.sub(r"[^\w]+", "", word.lower())
 
-    def _get_sense_synonyms(
-        self, synset: "wn.Synset"
-    ) -> t.List[t.Tuple[Form, t.Optional[str]]]:
-        """Get all synonyms for a specific word sense with their definitions."""
-        return [(lemma, synset.definition()) for lemma in synset.lemmas()]
 
-    def _explore_synset(  # pylint: disable=too-many-locals,R0917
-        self,
-        synset: "wn.Synset",
-        word_class: WordClass,
-        current_chain: t.List[str],
-        current_relations: t.List[str],
-        depth: int = 0,
-        seen_synsets: t.Optional[set] = None,
-    ) -> t.Tuple[
-        t.Dict[str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]],
-        t.Dict[str, t.List[RelationChain]],
-    ]:
-        """
-        Recursively explore a synset and its related terms, tracking the chain of relations.
-        Returns definitions grouped by word and relation chains.
-        """
-        if seen_synsets is None:
-            seen_synsets = set()
+class WordNetCompleter:
+    """Provides word completions with key semantic relationships."""
 
-        if depth >= self.MAX_DEPTH or synset.id in seen_synsets:
-            return {}, {}
+    def __init__(self, wordnet: CustomWordnet) -> None:
+        self.wn = wordnet
+        self._cache: t.Dict[str, t.List[t.Dict[str, t.Any]]] = {}
 
-        seen_synsets.add(synset.id)
-
-        # Initialize defaultdict for definitions
-        definitions: t.Dict[str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]] = (
-            defaultdict(list)
-        )
-        relation_chains: t.Dict[str, t.List[RelationChain]] = defaultdict(list)
-
-        # Get synonyms for this sense
-        sense_synonyms = [
-            (str(lemma), synset.definition()) for lemma in synset.lemmas()
-        ]
-
-        # Add definition and synonyms for each lemma
-        for lemma in synset.lemmas():
-            lemma_str = str(lemma)
-            definitions[lemma_str].append((synset.definition(), sense_synonyms))  # type: ignore
-
-        def process_related(related_synset: "wn.Synset", relation_type: str):
-            for lemma in related_synset.lemmas():
-                lemma_str = str(lemma)
-                if lemma_str in current_chain:
-                    continue
-
-                new_chain = current_chain + [lemma_str]
-                new_relations = current_relations + [relation_type]
-
-                chain = RelationChain(
-                    words=tuple(new_chain),
-                    relation_types=tuple(new_relations),
-                    final_definition=related_synset.definition(),
-                )
-
-                relation_chains[lemma_str].append(chain)
-
-                # Recursively explore if we haven't hit depth limit
-                if depth < self.MAX_DEPTH:
-                    sub_defs, sub_chains = self._explore_synset(
-                        related_synset,
-                        word_class,
-                        new_chain,
-                        new_relations,
-                        depth + 1,
-                        seen_synsets,
-                    )
-
-                    # Merge definitions and chains from recursive call
-                    for word, defs in sub_defs.items():
-                        definitions[word].extend(defs)
-                    for word, chains in sub_chains.items():
-                        relation_chains[word].extend(chains)
-
-        # Process relations based on word class
-        if (
-            word_class == WordClass.NOUN  # pylint: disable=consider-using-in
-            or word_class == WordClass.VERB  # pylint: disable=consider-using-in
-        ):
-            for hypernym in synset.hypernyms():
-                process_related(hypernym, "hypernym")
-            for hyponym in synset.hyponyms():
-                process_related(hyponym, "hyponym")
-            for meronym in synset.meronyms():
-                process_related(meronym, "member_meronym")
-            for holonym in synset.holonyms():
-                process_related(holonym, "member_holonym")
-
-        elif word_class == WordClass.ADJECTIVE:
-            for similar in getattr(synset, "similar_tos", []):
-                process_related(similar, "similar")
-            # Add other adjective-specific relations here if needed
-
-        elif word_class == WordClass.ADVERB:
-            # Add adverb-specific relations here if needed
-            pass
-
-        return dict(definitions), dict(relation_chains)
-
-    def build_semantic_document(
-        self, word: str, word_class: WordClass
-    ) -> SemanticDocument:
-        """Build a comprehensive semantic document for a word and its relations."""
-        all_definitions: t.Dict[
-            str, t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]]
-        ] = defaultdict(list)
-        all_chains: t.Dict[str, t.List[RelationChain]] = defaultdict(list)
-
-        # Collect definitions from all synsets
-        synsets = self.wn.synsets(word, pos=word_class.value)
-        for synset in synsets:
-            definitions, chains = self._explore_synset(
-                synset,
-                word_class,
-                [word],
-                [],
-                depth=0,
-                seen_synsets=set(),
-            )
-
-            # Merge definitions
-            for word_key, defs in definitions.items():
-                all_definitions[word_key].extend(defs)
-
-            # Merge chains
-            for target_word, word_chains in chains.items():
-                all_chains[target_word].extend(word_chains)
-
-        return SemanticDocument(
-            primary_word=word,
-            word_class=word_class,
-            definitions=dict(all_definitions),
-            relation_chains=dict(all_chains),
-        )
+    def _normalize_word(self, word: str) -> str:
+        return re.sub(r"[^\w]+", "", word.lower())
 
     def get_completions(self, word: str) -> t.List[t.Dict[str, t.Any]]:
-        """Get completions for a word with comprehensive semantic information."""
+        """Get completions with definitions and semantic relations."""
         if not word or len(word) < 2:
             return []
 
         normalized = self._normalize_word(word)
+        if normalized in self._cache:
+            return self._cache[normalized]
+
         completions = []
-        self._seen_combinations.clear()
+        seen_words = set()
 
-        # Process each word class
-        for word_class in WordClass:
-            # Build semantic document for this word class
-            doc = self.build_semantic_document(normalized, word_class)
-            if doc.definitions:  # Only process if we found any meanings
-                # Convert to completion items
-                completions.extend(self.format_completion_items(doc))
+        # Get synsets with prefix matching
+        synsets = self.wn.synsets(normalized, prefix_search=True)
 
-        return completions
+        # Group synsets by POS for better organization
+        noun_synsets = []
+        verb_synsets = []
+        adj_synsets = []
+        adv_synsets = []
 
-    def _format_documentation(
-        self,
-        word: str,
-        word_class: WordClass,
-        senses: t.List[t.Tuple[str, t.List[t.Tuple[str, str]]]],
-    ) -> str:
-        """Format the documentation to show all senses and their synonyms."""
-        doc_parts = [f"# {word} [{word_class.display_name}]\n"]
+        for synset in synsets:
+            if synset.pos == "n":
+                noun_synsets.append(synset)
+            elif synset.pos == "v":
+                verb_synsets.append(synset)
+            elif synset.pos in ("a", "s"):
+                adj_synsets.append(synset)
+            elif synset.pos == "r":
+                adv_synsets.append(synset)
 
-        for idx, (definition, synonyms) in enumerate(senses, 1):
-            # Add sense number and definition
-            doc_parts.append(f"## Sense {idx}")
-            doc_parts.append(f"{definition}\n")
+        def add_completion(
+            word: str,
+            pos: str,
+            rel_type: str,
+            definition: str,
+            menu_label: str,
+            extra_info: str = "",
+        ) -> None:
+            if word not in seen_words:
+                seen_words.add(word)
+                doc = [f"# {word} [{pos}]"]
+                if definition:
+                    doc.append(f"\n{definition}")
+                if extra_info:
+                    doc.append(f"\n{extra_info}")
 
-            # Add synonyms for this sense, excluding the main word
-            syn_items = [
-                (syn, syn_def)
-                for syn, syn_def in synonyms
-                if syn.lower() != word.lower()
-            ]
-            if syn_items:
-                doc_parts.append("Synonyms:")
-                for syn, syn_def in syn_items:
-                    doc_parts.append(f"- {syn}: {syn_def}")
-                doc_parts.append("")  # Add empty line after synonyms
-
-        return "\n".join(doc_parts)
-
-    def format_completion_items(  # pylint: disable=too-many-locals
-        self, doc: SemanticDocument
-    ) -> t.List[t.Dict[str, t.Any]]:
-        """Format a semantic document into completion items with rich metadata."""
-        items = []
-        seen_combinations = set()
-
-        # Process each word and its senses
-        for word, senses in doc.definitions.items():
-            key = (word, doc.word_class.value)
-            if key not in seen_combinations:
-                seen_combinations.add(key)
-
-                # Simple menu text
-                menu_text = f"[{doc.word_class.display_name}]"
-
-                # Create documentation with all senses and synonyms
-                doc_text = self._format_documentation(
-                    word, doc.word_class, tuple(senses)
-                )  # type: ignore
-
-                items.append(
+                completions.append(
                     {
                         "word": word,
-                        "kind": doc.word_class.display_name,
-                        "menu": menu_text,
+                        "kind": f"{pos}:{rel_type}" if rel_type != "main" else pos,
+                        "menu": f"[{menu_label}]",
                         "data": {
-                            "word_class": doc.word_class.display_name,
-                            "type": "main",
-                            "definitions": senses,
+                            "pos": pos,
+                            "type": rel_type,
+                            "definition": definition,
                         },
-                        "documentation": {"kind": "markdown", "value": doc_text},
+                        "documentation": {"kind": "markdown", "value": "\n".join(doc)},
                     }
                 )
 
-        # Add semantic relations
-        relation_markers = {
-            "hyponym": ("spec", "More specific form"),
-            "hypernym": ("gen", "More general form"),
-            "member_meronym": ("mem", "Member component"),
-            "part_meronym": ("part", "Part component"),
-            "substance_meronym": ("subst", "Made of"),
-            "member_holonym": ("memof", "Has member"),
-            "part_holonym": ("partof", "Part of"),
-            "substance_holonym": ("substof", "Material of"),
-            "troponym": ("manner", "More specific way"),
-            "similar": ("sim", "Similar term"),
-            "antonym": ("opp", "Opposite"),
-            "entailment": ("impl", "Implies"),
-        }
+        # Process nouns first (most common)
+        for synset in noun_synsets:
+            def_text = synset.definition() or ""
 
-        for target_word, chains in doc.relation_chains.items():
-            key = (target_word, doc.word_class.value)
-            if key not in seen_combinations:
-                seen_combinations.add(key)
-                for chain in chains:
-                    relation_type = chain.relation_types[-1]
-                    marker, desc = relation_markers.get(
-                        relation_type, ("rel", "Related term")
+            # Direct matches/lemmas
+            for lemma in synset.lemmas():
+                word = str(lemma)
+                add_completion(word, "NOUN", "main", def_text, "N")
+
+            # Hypernyms (broader terms)
+            for hyper in synset.hypernyms():
+                hyper_def = hyper.definition() or ""
+                for lemma in hyper.lemmas():
+                    word = str(lemma)
+                    add_completion(
+                        word,
+                        "NOUN",
+                        "broader",
+                        hyper_def,
+                        "N↑",
+                        f"**Broader term** for: {normalized}",
                     )
 
-                    # Simple menu text for relations
-                    menu_text = f"[{doc.word_class.display_name}:{marker}]"
-
-                    items.append(
-                        {
-                            "word": target_word,
-                            "kind": f"{doc.word_class.display_name}:{marker}",
-                            "menu": menu_text,
-                            "data": {
-                                "word_class": doc.word_class.display_name,
-                                "type": relation_type,
-                                "chain": list(chain.words),
-                                "relations": list(chain.relation_types),
-                                "definition": chain.final_definition,
-                            },
-                            "documentation": {
-                                "kind": "markdown",
-                                "value": (
-                                    f"# {target_word} [{doc.word_class.display_name}]\n\n"
-                                    f"{chain.final_definition}\n\n"
-                                    f"**{desc}** of: {doc.primary_word}\n"
-                                    f"Chain: {' → '.join(chain.words)}"
-                                ),
-                            },
-                        }
+            # Hyponyms (more specific terms)
+            for hypo in synset.hyponyms():
+                hypo_def = hypo.definition() or ""
+                for lemma in hypo.lemmas():
+                    word = str(lemma)
+                    add_completion(
+                        word,
+                        "NOUN",
+                        "narrower",
+                        hypo_def,
+                        "N↓",
+                        f"**More specific term** for: {normalized}",
                     )
 
-        return items
+            # Meronyms (part-of relations)
+            for mero in synset.meronyms():
+                mero_def = mero.definition() or ""
+                for lemma in mero.lemmas():
+                    word = str(lemma)
+                    add_completion(
+                        word,
+                        "NOUN",
+                        "part",
+                        mero_def,
+                        "N→",
+                        f"**Part of**: {normalized}",
+                    )
+
+        # Process verbs
+        for synset in verb_synsets:
+            def_text = synset.definition() or ""
+
+            # Direct matches
+            for lemma in synset.lemmas():
+                word = str(lemma)
+                add_completion(word, "VERB", "main", def_text, "V")
+
+            # Troponyms (manner)
+            for trop in synset.hyponyms():
+                trop_def = trop.definition() or ""
+                for lemma in trop.lemmas():
+                    word = str(lemma)
+                    add_completion(
+                        word,
+                        "VERB",
+                        "manner",
+                        trop_def,
+                        "V↓",
+                        f"**More specific way** to {normalized}",
+                    )
+
+        # Process adjectives
+        for synset in adj_synsets:
+            def_text = synset.definition() or ""
+
+            # Direct matches
+            for lemma in synset.lemmas():
+                word = str(lemma)
+                add_completion(word, "ADJ", "main", def_text, "A")
+
+            # Similar terms
+            if hasattr(synset, "similar_tos"):
+                for sim in synset.similar_tos():
+                    sim_def = sim.definition() or ""
+                    for lemma in sim.lemmas():
+                        word = str(lemma)
+                        add_completion(
+                            word,
+                            "ADJ",
+                            "similar",
+                            sim_def,
+                            "A≈",
+                            f"**Similar to**: {normalized}",
+                        )
+
+        # Process adverbs
+        for synset in adv_synsets:
+            def_text = synset.definition() or ""
+            for lemma in synset.lemmas():
+                word = str(lemma)
+                add_completion(word, "ADV", "main", def_text, "R")
+
+        # Cache and return results
+        self._cache[normalized] = completions
+        return completions
+
+
+def wordnet_complete(base: str) -> t.List[t.Dict[str, t.Any]]:
+    """Main completion function to be called from Vim/Lua."""
+    return completer.get_completions(base)
 
 
 if pytest_active:
     import pytest
 
     @pytest.fixture
-    def wordnet_mock():
-        """Create a mock WordNet instance for testing."""
-
-        class MockSynset:
-            def __init__(self):
-                self.id = "test.n.01"  # Add mock synset ID
-
-            def definition(self):
-                return "test definition"
-
-            def lemmas(self):
-                return ["test", "example"]
-
-            def hypernyms(self):
-                return []
-
-            def hyponyms(self):
-                return []
-
-            def meronyms(self):
-                return []
-
-            def holonyms(self):
-                return []
-
-        class MockWordNet:
-            def synsets(
-                self, word: str, pos: str  # pylint: disable=unused-argument
-            ) -> t.List[MockSynset]:
-                return [MockSynset()]
-
-        return MockWordNet()
+    def test_completer():  # pylint: disable=redefined-outer-name
+        """Create a WordNetCompleter instance for testing."""
+        return WordNetCompleter(CustomWordnet(ARTEFACT_NAME))
 
     def test_normalize_word(test_completer):  # pylint: disable=redefined-outer-name
         """Test word normalization."""
@@ -678,11 +476,6 @@ if pytest_active:
             == "test_word"
         )
 
-    @pytest.fixture
-    def test_completer(wordnet_mock):  # pylint: disable=redefined-outer-name
-        """Create a WordNetCompleter instance for testing."""
-        return WordNetCompleter(wordnet_mock)
-
     def test_empty_input(test_completer):  # pylint: disable=redefined-outer-name
         """Test handling of empty input."""
         assert not test_completer.get_completions("")
@@ -698,27 +491,106 @@ if pytest_active:
         assert "menu" in completion
         assert "documentation" in completion
 
+    @pytest.fixture
+    def better_completer():
+        return WordNetCompleter(CustomWordnet(ARTEFACT_NAME))
+
+    def test_prefix_search(better_completer):
+        """Test prefix-based word search functionality."""
+        # Test with "anti" prefix
+        anti_completions = better_completer.get_completions("anti")
+        anti_words = {completion["word"] for completion in anti_completions}
+        expected_anti_words = {
+            "antioxidant",
+            "antibiotic",
+            "antiseptic",
+            "antihistamine",
+            "antidote",
+            "antibody",
+            "antivirus",
+        }
+        assert any(word in anti_words for word in expected_anti_words)
+
+        # Test with "well" prefix
+        well_completions = better_completer.get_completions("well")
+        well_words = {completion["word"] for completion in well_completions}
+        expected_well_words = {
+            "well",
+            "wellness",
+            "wellbeing",
+            "well-being",
+            "well-known",
+            "well-made",
+            "well-off",
+        }
+        assert any(word in well_words for word in expected_well_words)
+
+        # Print found words for debugging
+        print("\nFound 'anti' words:", sorted(list(anti_words)))
+        print("Found 'well' words:", sorted(list(well_words)))
+
+    def test_partial_word_completion(better_completer):
+        """Test completion with partial words."""
+        # Test with partial word "comput"
+        comput_completions = better_completer.get_completions("comput")
+        comput_words = {completion["word"] for completion in comput_completions}
+        expected_comput_words = {
+            "compute",
+            "computer",
+            "computation",
+            "computing",
+            "computational",
+            "computerize",
+        }
+        assert any(word in comput_words for word in expected_comput_words)
+
+        # Print found words for debugging
+        print("\nFound 'comput' words:", sorted(list(comput_words)))
+
+    def test_different_pos_completions(better_completer):
+        """Test completions across different parts of speech."""
+        # Test word that can be noun/verb/adjective
+        test_completions = better_completer.get_completions("light")
+        pos_types = {completion["kind"] for completion in test_completions}
+
+        # Should find multiple parts of speech
+        assert len(pos_types) > 1
+        print("\nFound POS types for 'light':", sorted(list(pos_types)))
+        print(
+            "Found 'light' completions:",
+            [(c["word"], c["kind"]) for c in test_completions[:10]],
+        )
+
+    def test_semantic_relations(better_completer):
+        """Test that semantic relations are included in completions."""
+        cat_completions = better_completer.get_completions("cat")
+        relation_types = set()
+
+        for completion in cat_completions:
+            if "data" in completion and "type" in completion["data"]:
+                relation_types.add(completion["data"]["type"])
+
+        # Should find various semantic relations
+        expected_relations = {"hypernym", "hyponym", "member_meronym", "main"}
+        assert any(rel in relation_types for rel in expected_relations)
+
+        print("\nFound relation types for 'cat':", sorted(list(relation_types)))
+
 else:
-    pass
+    try:
 
-try:
-    # Global instance of the completer
-    completer = WordNetCompleter(wn.Wordnet(ARTEFACT_NAME))
+        # Global instance of the completer
+        completer = WordNetCompleter(CustomWordnet(ARTEFACT_NAME))
 
-except Exception as e:  # pylint: disable=broad-except
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "wn",
-            "download",
-            ARTEFACT_NAME,
-        ]
-    )
-    # Global instance of the completer
-    completer = WordNetCompleter(wn.Wordnet(ARTEFACT_NAME))
-
-
-def wordnet_complete(base: str) -> t.List[t.Dict[str, t.Any]]:
-    """Main completion function to be called from Vim/Lua."""
-    return completer.get_completions(base)
+    except Exception as e:  # pylint: disable=broad-except
+        subprocess.check_call(
+            [
+                sys.executable,
+                "-m",
+                "wn",
+                "download",
+                ARTEFACT_NAME,
+            ]
+        )
+        # Global instance of the completer
+        completer = WordNetCompleter(CustomWordnet(ARTEFACT_NAME))
