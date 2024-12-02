@@ -2,3 +2,4 @@ pylint
 pytest
 wn>=0.10.1
 vim-client
+vim-vint==0.3.21
