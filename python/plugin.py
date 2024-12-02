@@ -282,17 +282,21 @@ class WordNetCompleter:
             rel_type: str,
             definition: str,
             menu_label: str,
-            extra_info: str = "",
+            base_word: str,  # Add base word parameter
+            extra_desc: str = "",  # Add description parameter
         ) -> None:
             if word not in seen_words:
                 seen_words.add(word)
                 doc = [f"# {word} [{pos}]"]
-                if definition:
-                    doc.append(f"\n{definition}")
-                if extra_info:
-                    doc.append(f"\n{extra_info}")
 
-                # Map relationship types to test-expected values
+                if definition:
+                    pretty_def = definition  # _prettify_quotes(definition)
+                    doc.append(f"\n{pretty_def}")
+
+                if extra_desc:
+                    relation_text = f"\n**{extra_desc}**: {base_word}"
+                    doc.append(relation_text)
+
                 type_mapping = {
                     "broader": "hypernym",
                     "narrower": "hyponym",
@@ -308,7 +312,7 @@ class WordNetCompleter:
                         "data": {
                             "pos": pos,
                             "type": actual_type,
-                            "definition": definition,
+                            "definition": definition,  # _prettify_quotes(definition) if definition else ""
                         },
                         "documentation": {"kind": "markdown", "value": "\n".join(doc)},
                     }
@@ -316,6 +320,11 @@ class WordNetCompleter:
 
         for synset in synsets:
             def_text = synset.definition() or ""
+            base_lemma = next(
+                iter(synset.lemmas()), ""
+            )  # Get the first lemma as base word
+            base_word = str(base_lemma) if base_lemma else normalized
+
             pos_name = {"n": "NOUN", "v": "VERB", "a": "ADJ", "s": "ADJ", "r": "ADV"}[
                 synset.pos
             ]
@@ -323,7 +332,7 @@ class WordNetCompleter:
             # Direct matches/lemmas
             for lemma in synset.lemmas():
                 word = str(lemma)
-                add_completion(word, pos_name, "main", def_text, pos_name[0])
+                add_completion(word, pos_name, "main", def_text, pos_name[0], base_word)
 
             if synset.pos in ("n", "v"):  # Nouns and verbs
                 # Hypernyms (broader terms)
@@ -337,7 +346,8 @@ class WordNetCompleter:
                             "broader",
                             hyper_def,
                             f"{pos_name[0]}↑",
-                            f"**More general term** for: {synset.words()[0] if synset.words() else synset}",
+                            base_word,
+                            "More general term for",
                         )
 
                 # Hyponyms (more specific terms)
@@ -351,7 +361,8 @@ class WordNetCompleter:
                             "narrower",
                             hypo_def,
                             f"{pos_name[0]}↓",
-                            f"**More specific term** for: {synset.words()[0] if synset.words() else synset}",
+                            base_word,
+                            "More specific term for",
                         )
 
             if synset.pos == "n":  # Nouns only
@@ -361,24 +372,25 @@ class WordNetCompleter:
                     for lemma in mero.lemmas():
                         word = str(lemma)
                         add_completion(
-                            word,
-                            pos_name,
-                            "part",
-                            mero_def,
-                            "N→",
-                            f"**Part of**: {normalized}",
+                            word, pos_name, "part", mero_def, "N→", base_word, "Part of"
                         )
 
-            if hasattr(synset, "relations"):
-                for rel_word in synset.relations():
-                    add_completion(
-                        rel_word,
-                        pos_name,
-                        "similar",
-                        synset.definition() or "",
-                        "A≈",
-                        f"**Similar to**: {normalized}",
-                    )
+            if synset.pos in ("a", "s"):  # Adjectives
+                # Similar terms
+                if hasattr(synset, "similar_tos"):
+                    for sim in synset.similar_tos():
+                        sim_def = sim.definition() or ""
+                        for lemma in sim.lemmas():
+                            word = str(lemma)
+                            add_completion(
+                                word,
+                                pos_name,
+                                "similar",
+                                sim_def,
+                                "A≈",
+                                base_word,
+                                "Similar to",
+                            )
 
         self._cache[normalized] = completions
         return completions
